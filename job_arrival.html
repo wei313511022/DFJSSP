@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Job Arrival Demo</title>
+    <!-- Using Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the demo */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Base width unit: we'll use 10px for every 1 second of processing time */
+        .job-a { width: 100px; background-color: #4ade80; /* green-400 */ }
+        .job-b { width: 120px; background-color: #60a5fa; /* blue-400 */ }
+        .job-c { width: 80px;  background-color: #f87171; /* red-400 */ }
+        
+        .job-block {
+            height: 60px;
+            border: 2px solid rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #1f2937; /* gray-800 */
+            flex-shrink: 0;
+            margin-left: -2px; /* Overlap borders */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+
+    <div class="max-w-6xl mx-auto bg-white p-6 rounded-xl shadow-lg">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4">Dynamic Job Arrival Simulation</h1>
+        <p class="text-gray-600 mb-6">This demo visualizes dynamic job arrivals based on a Poisson process. It only shows the arrival queue, not the processing at the stops, as you requested.</p>
+
+        <!-- Controls -->
+        <div class="flex items-center space-x-4 mb-6 p-4 bg-gray-50 rounded-lg">
+            <button id="startStopBtn" class="bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow hover:bg-blue-700 transition">
+                Start Simulation
+            </button>
+            <div class="flex items-baseline">
+                <span class="text-lg font-semibold text-gray-700 mr-2">Simulation Time:</span>
+                <span id="simTimeDisplay" class="text-2xl font-bold text-gray-900">0.00</span>
+                <span class="text-lg text-gray-600 ml-1">seconds</span>
+            </div>
+        </div>
+
+        <!-- Visual Queue Display -->
+        <div>
+            <h2 class="text-xl font-semibold text-gray-700 mb-3">Job Arrival Queue Timeline:</h2>
+            <div class="w-full bg-gray-200 p-2 rounded-lg shadow-inner overflow-x-auto">
+                <!-- The "queue" bar from your example -->
+                <div class="flex items-center h-24 border-2 border-gray-400 bg-white">
+                    <span class="text-lg font-bold text-gray-500 px-4">Queue</span>
+                    <!-- Jobs will be added here by JavaScript -->
+                    <div id="queueContainer" class="flex h-full items-center">
+                        <!-- Example of a job:
+                        <div classclass="job-block job-a">Job 0 (A)</div> 
+                        -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Simulation Configuration ---
+        const AVG_INTERARRIVAL_TIME = 5.0; // Average time (in seconds) between new job arrivals
+        const SIM_SPEED_MULTIPLIER = 10;   // Run 10x faster than real-time
+        const UPDATE_INTERVAL_MS = 100;    // Update the simulation clock every 100ms (0.1s)
+        
+        const JOB_TYPES = {
+            'A': { time: 10, style: 'job-a' },
+            'B': { time: 12, style: 'job-b' },
+            'C': { time: 8,  style: 'job-c' }
+        };
+        const JOB_TYPE_KEYS = Object.keys(JOB_TYPES);
+
+        // --- 2. Simulation State ---
+        let simulationTime = 0.0;
+        let jobCounter = 0;
+        let nextJobArrivalTime = 0.0;
+        let isRunning = false;
+        let simulationTimer = null; // To store the timer ID from setTimeout
+
+        // --- 3. DOM Elements ---
+        const startStopBtn = document.getElementById('startStopBtn');
+        const simTimeDisplay = document.getElementById('simTimeDisplay');
+        const queueContainer = document.getElementById('queueContainer');
+
+        // --- 4. Simulation Logic ---
+
+        /**
+         * Calculates the time until the next Poisson-distributed event.
+         * @param {number} avgRate - The average time between events.
+         * @returns {number} - The random time to wait for the next event.
+         */
+        function getNextPoissonTime(avgRate) {
+            // Using the inverse transform method for exponential distribution
+            // This models the time *between* arrivals in a Poisson process
+            return -Math.log(1.0 - Math.random()) * avgRate;
+        }
+
+        /**
+         * The main simulation loop. Runs every UPDATE_INTERVAL_MS.
+         */
+        function simulationStep() {
+            if (!isRunning) return;
+
+            // Calculate how much real time has passed and scale it by speed
+            const timeDelta = (UPDATE_INTERVAL_MS / 1000.0) * SIM_SPEED_MULTIPLIER;
+            simulationTime += timeDelta;
+
+            // Check if it's time to add a new job
+            if (simulationTime >= nextJobArrivalTime) {
+                // A job has arrived!
+                generateNewJob();
+
+                // Schedule the next job arrival
+                const nextWaitTime = getNextPoissonTime(AVG_INTERARRIVAL_TIME);
+                nextJobArrivalTime = simulationTime + nextWaitTime;
+            }
+
+            // Update the display
+            simTimeDisplay.textContent = simulationTime.toFixed(2);
+
+            // Schedule the next step
+            simulationTimer = setTimeout(simulationStep, UPDATE_INTERVAL_MS);
+        }
+
+        /**
+         * Creates a new job, adds it to the visual queue, and increments the counter.
+         */
+        function generateNewJob() {
+            // 1. Get random job properties
+            const randomTypeKey = JOB_TYPE_KEYS[Math.floor(Math.random() * JOB_TYPE_KEYS.length)];
+            const jobType = JOB_TYPES[randomTypeKey];
+            const jobId = jobCounter++;
+            const jobName = `Job_${jobId} (${randomTypeKey})`;
+
+            // 2. Create the visual job block element
+            const jobElement = document.createElement('div');
+            jobElement.className = `job-block ${jobType.style}`;
+            jobElement.textContent = jobName;
+            
+            // Add a title tooltip
+            jobElement.title = `${jobName}\nProcessing Time: ${jobType.time}s\nArrived at: ${simulationTime.toFixed(2)}s`;
+
+            // 3. Add to the queue
+            queueContainer.appendChild(jobElement);
+            
+            // Auto-scroll the queue container to the end
+            queueContainer.parentElement.scrollLeft = queueContainer.parentElement.scrollWidth;
+        }
+
+        /**
+         * Toggles the simulation state between running and paused.
+         */
+        function toggleSimulation() {
+            isRunning = !isRunning;
+            if (isRunning) {
+                // --- Start ---
+                startStopBtn.textContent = 'Pause Simulation';
+                startStopBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                startStopBtn.classList.add('bg-red-600', 'hover:bg-red-700');
+
+                // If this is the very first run, schedule the first job
+                if (simulationTime === 0.0) {
+                    nextJobArrivalTime = getNextPoissonTime(AVG_INTERARRIVAL_TIME);
+                }
+                
+                // Start the loop
+                simulationStep();
+            } else {
+                // --- Pause ---
+                startStopBtn.textContent = 'Start Simulation';
+                startStopBtn.classList.remove('bg-red-600', 'hover:bg-red-700');
+                startStopBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                
+                // Stop the loop
+                clearTimeout(simulationTimer);
+            }
+        }
+
+        // --- 5. Event Listeners ---
+        startStopBtn.addEventListener('click', toggleSimulation);
+    </script>
+</body>
+</html>
