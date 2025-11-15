@@ -367,9 +367,9 @@ def create_amrs(ax) -> Dict[int, AMRState]:
     amrs: Dict[int, AMRState] = {}
     # simple starting positions; adjust as you like
     starts = {
-        1: (2.0, 3.0),
-        2: (2.0, 6.0),
-        3: (2.0, 9.0),
+        1: (2.0, 1.0),
+        2: (2.0, 4.0),
+        3: (2.0, 7.0),
     }
     for i in range(1, AMR_COUNT + 1):
         x, y = starts.get(i, (1.0, 1.0))
