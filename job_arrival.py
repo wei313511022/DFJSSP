@@ -19,7 +19,6 @@ import json, time, os
 open("dispatch_inbox.jsonl", "w").close()
 open("schedule_outbox.jsonl", "w").close()
 
-DISPATCH_SNAPSHOT_PATH = "dispatch_snapshot.json"
 DISPATCH_INBOX = "dispatch_inbox.jsonl"
 
 def append_dispatch_inbox(jobs, dispatch_time):
@@ -34,24 +33,6 @@ def append_dispatch_inbox(jobs, dispatch_time):
     with open(DISPATCH_INBOX, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
     print(f"[inbox] appended {len(jobs)} jobs -> {os.path.abspath(DISPATCH_INBOX)}")
-
-def export_dispatch_snapshot(path, jobs, dispatch_time):
-    payload = {
-        "generated_at": time.time(),
-        "dispatch_time": dispatch_time,
-        "jobs": [
-            {
-                "jid": j.jid,
-                "type": j.jtype,
-                "proc_time": float(j.proc_time),
-                "station": int(j.station) if getattr(j, "station", None) else None
-            }
-            for j in jobs
-        ]
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    print(f"[snapshot] wrote {len(payload['jobs'])} jobs -> {os.path.abspath(path)}")
 
 
 # --------------------------- Config ---------------------------
@@ -83,8 +64,8 @@ CLEAR_DELAY_S     = 10.0
 # Job types (block widths)
 JOB_TYPES: Dict[str, Dict[str, float]] = {
     "A": {"time": 10.0},
-    "B": {"time": 12.0},
-    "C": {"time":  8.0},
+    "B": {"time": 15.0},
+    "C": {"time": 20.0},
 }
 JOB_TYPE_KEYS = list(JOB_TYPES.keys())
 

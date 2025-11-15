@@ -26,7 +26,7 @@ def emit_assignment(amr_id, job):
         "proc_time": float(job.proc_time),
         # optional: a station if you want to keep the same station mapping as Program 1
         # otherwise Program 3 will map job types to stations deterministically
-        "station": None
+        "station": str(job.station),
     }
     with open(SCHEDULE_OUTBOX, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
@@ -61,6 +61,7 @@ class Job:
     jid: int
     jtype: str
     proc_time: float
+    station: str
 
 # ------------ Scheduler state ------------
 waiting: List[Job] = []         # FIFO waiting (top lane)
@@ -161,6 +162,7 @@ def ingest_new_batches(ax):
                     jid=int(j["jid"]),
                     jtype=str(j.get("type", "A")),
                     proc_time=float(j["proc_time"]),
+                    station=str(j["station"]),
                 ))
                 added += 1
         except Exception as e:
