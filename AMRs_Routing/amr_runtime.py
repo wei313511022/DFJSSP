@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 
 # ---------- Files ----------
-SCHEDULE_INBOX = "schedule_outbox.jsonl"   # this is your file
+SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"   # this is your file
 
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 10
@@ -34,7 +34,7 @@ OBSTACLES: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
 UPDATE_INTERVAL_MS = 100         # timer tick in ms
-SIM_SPEED_MULT     = 1.0          # speed-up factor
+SIM_SPEED_MULT     = 5.0          # speed-up factor
 CELLS_PER_SEC      = 1.0          # grid cells per simulated second
 
 AMR_COUNT = 3                     # number of AMRs
