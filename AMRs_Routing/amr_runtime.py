@@ -31,6 +31,7 @@ STATION_POS: Dict[int, Tuple[int, int]] = {
 
 # Optional: obstacles, empty for now
 OBSTACLES: Set[Tuple[int, int]] = set()
+AMR_LOCATIONS: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
 UPDATE_INTERVAL_MS = 100         # timer tick in ms
@@ -239,8 +240,8 @@ def ingest_new_assignments(amrs: Dict[int, AMRState]) -> bool:
             amr_id = int(rec["amr"])
             jid    = int(rec["jid"])
             jtype  = str(rec.get("type", "A"))
-            station = int(rec["station"])
             proc_time = float(rec.get("proc_time", 0.0))
+            station = int(rec["station"])
 
             if amr_id not in amrs:
                 print(f"[warn] assignment for unknown AMR {amr_id}: {ln}")
@@ -391,6 +392,7 @@ def create_amrs(ax) -> Dict[int, AMRState]:
             zorder=6,
         )
         amrs[i] = st
+        # AMR_LOCATIONS.add((amrs[i].posx, amrs[i].posy))
     return amrs
 
 
@@ -403,6 +405,7 @@ def main():
 
     draw_static(ax)
     amrs = create_amrs(ax)
+    amrs[1].queue.append(Job(jid=0, station=1, jtype="A", proc_time=10.0))
 
     is_running = True
     sim_t = 0.0
@@ -410,6 +413,7 @@ def main():
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
 
     def tick():
+        # print(AMR_LOCATIONS)
         nonlocal is_running, sim_t
         changed = False
 
