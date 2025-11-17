@@ -36,9 +36,9 @@ def append_dispatch_inbox(jobs, dispatch_time):
 
 
 # --------------------------- Config ---------------------------
-AVG_INTERARRIVAL_TIME = 2.0
-SIM_SPEED_MULTIPLIER   = 2.0
-UPDATE_INTERVAL_MS     = 100
+AVG_INTERARRIVAL_TIME = 5.0
+SIM_SPEED_MULTIPLIER   = 1.0
+UPDATE_INTERVAL_MS     = 1000
 
 LEFT_LABEL_PAD = 5.0
 VIEW_WIDTH     = 40.0
