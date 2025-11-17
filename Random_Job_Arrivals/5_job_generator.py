@@ -43,7 +43,7 @@ def append_dispatch_inbox(jobs, dispatch_time):
 
 # --------------------------- Config ---------------------------
 AVG_INTERARRIVAL_TIME = 2.0
-SIM_SPEED_MULTIPLIER   = 2.0
+SIM_SPEED_MULTIPLIER   = 10.0
 UPDATE_INTERVAL_MS     = 100
 
 LEFT_LABEL_PAD = 5.0
@@ -67,7 +67,7 @@ BOT_LANE_H     = BOTTOM_HEIGHT / STATION_COUNT * 0.7
 
 # Dispatch behaviour
 CLEAR_DELAY_S       = 10.0        # clear bottom snapshot this many sim-sec after dispatch
-DISPATCH_BATCH_SIZE = 5           # number of jobs per dispatch (up to this many)
+DISPATCH_BATCH_SIZE = 10           # number of jobs per dispatch (up to this many)
 
 # Job types (block widths)
 JOB_TYPES: Dict[str, Dict[str, float]] = {
