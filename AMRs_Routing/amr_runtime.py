@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 
 # ---------- Files ----------
-SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox_DEMO.jsonl"
+SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"
 
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 10
@@ -67,7 +67,7 @@ CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 AMR_COUNT = 3                    # number of AMRs
 
 # Each AMR can carry up to this many units of each material type
-MATERIAL_CAPACITY = 10
+MATERIAL_CAPACITY = 1
 REFILL_CAPACITY = 1
 
 Coord = Tuple[int, int]
@@ -404,17 +404,20 @@ def try_start_next_job(amr: AMRState, amrs: Dict[int, AMRState]) -> bool:
     amr.job = amr.queue.pop(0)
     jtype = amr.job.jtype
     have = amr.inventory.get(jtype, 0)
+    dest = STATION_POS[amr.job.station]
 
     if have <= 0:
         # Need to resupply first
         amr.phase = "supply"
-        plan_path_to_material(amr, amrs)
+        dest = MAT_POS[jtype]
+        # plan_path_to_material(amr, amrs)
     else:
         # Already carrying material, go directly to production station
         amr.phase = "deliver"
-        plan_path_to_station(amr, amr.job.station, amrs)
+        dest = STATION_POS[amr.job.station]
+        # plan_path_to_station(amr, amr.job.station, amrs)
 
-    if len(amr.path) > 1 and not amr.blocked:
+    if cur_cell(amr) != dest:
         amr.state = "move"
     else:
         # Path not found or already at target; treat as immediate arrival
@@ -447,8 +450,8 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
 
         # now go deliver
         amr.phase = "deliver"
-        plan_path_to_station(amr, amr.job.station, amrs)
-        if cur_cell(amr) != STATION_POS.get(amr.job.station, (-1, -1)) and not amr.blocked:
+        # plan_path_to_station(amr, amr.job.station, amrs)
+        if cur_cell(amr) != STATION_POS.get(amr.job.station, (-1, -1)):
             amr.state = "move"
         else:
             # already at station or blocked in a weird way
@@ -494,6 +497,7 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
 
 def simple_step(amrs: Dict[int, AMRState], dt: float):
     # Replan routes for moving AMRs each tick (priority-aware obstacles)
+    
     for st in amrs.values():
         if st.state == "move" and st.job is not None:
             if st.phase == "supply":
@@ -511,7 +515,7 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
     for st in amrs.values():
         while (
             st.state == "move"
-            and st.move_budget >= 1.0
+            and st.move_budget >= CELLS_PER_SEC * dt
             and st.waypoint_idx < len(st.path)
         ):
             nxt = st.path[st.waypoint_idx]
@@ -522,7 +526,7 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
             AMR_LOCATIONS.add((round(st.posx), round(st.posy)))
 
             st.waypoint_idx += 1
-            st.move_budget -= 1.0
+            st.move_budget -= CELLS_PER_SEC * dt
             if st.waypoint_idx >= len(st.path):
                 # reached target of this leg
                 on_arrival(st, amrs)
@@ -696,6 +700,7 @@ def main():
     sim_t = 0.0
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
+    have_plan = False #/Because timer run too fast for each step simulation, we only want to route the path per second 
 
     def tick():
         for i, st_i in amrs.items():
