@@ -30,6 +30,12 @@ SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 10
 
+START_POS:  Dict[int, Tuple[int, int]] = {
+    1: (2.0, 1.0),
+    2: (2.0, 4.0),
+    3: (2.0, 7.0),
+}
+
 # Production stations (right side).
 STATION_POS: Dict[int, Tuple[int, int]] = {
     3: (9, 1),
@@ -60,7 +66,7 @@ OBSTACLES: Set[Tuple[int, int]] = set()
 AMR_LOCATIONS: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
-UPDATE_INTERVAL_MS = 100         # timer tick in ms
+UPDATE_INTERVAL_MS = 200         # timer tick in ms
 SIM_SPEED_MULT     = 1.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
@@ -176,8 +182,10 @@ def astar_8dir(start: Coord,
                blocked: Set[Coord]) -> List[Coord]:
     if start == goal:
         return [start]
-    if start in blocked or goal in blocked:
+    # if start in blocked or goal in blocked:
+    if start in blocked:
         return []
+    
 
     STEPS = [
         (1, 0, 1.0), (-1, 0, 1.0),
@@ -295,6 +303,84 @@ def _build_blocked_for(amr: AMRState, amrs: Dict[int, AMRState]) -> Set[Coord]:
     return blocked
 
 
+def _plan_path_with_parking(amr: AMRState,
+                            amrs: Dict[int, AMRState],
+                            goal: Coord):
+    start = cur_cell(amr)
+    blocked = _build_blocked_for(amr, amrs)
+
+    occupied_by_other = any(
+        (cur_cell(o) == goal and o.amr_id != amr.amr_id)
+        for o in amrs.values()
+    )
+
+    # 目標目前不能進去 → 找旁邊的「停車格」
+    if goal in blocked or occupied_by_other:
+        cand_cells = [
+            (goal[0] + 1, goal[1]),
+            (goal[0] - 1, goal[1]),
+            (goal[0], goal[1] + 1),
+            (goal[0], goal[1] - 1),
+        ]
+        best_path = None
+
+        for cx, cy in cand_cells:
+            if not in_bounds(cx, cy) or (cx, cy) in blocked:
+                continue
+
+            p = astar_8dir(start, (cx, cy), blocked)
+            # ★ 必須確定路徑真的有「走一步以上」，才能接受
+            if p and len(p) > 1:
+                if best_path is None or len(p) < len(best_path):
+                    best_path = p
+
+        if best_path is not None:
+            amr.path = best_path
+            amr.blocked = False
+            amr.waypoint_idx = 1  # index 0 是目前所在格
+            amr.move_budget = 0.0  # ★ 換新路徑時清掉舊的 budget
+            _update_route_artist(amr)
+            return
+
+        # 連停在旁邊一格都找不到路 → 視為 blocked
+        amr.path = []
+        amr.blocked = True
+        amr.waypoint_idx = 0
+        amr.move_budget = 0.0      # ★ 避免累積
+        _update_route_artist(amr)
+        return
+
+    # 目標沒被佔 → 正常規劃到 goal
+    path = astar_8dir(start, goal, blocked)
+
+    # ★ 同樣檢查：沒路 or 只有自己這一格 → 當作 blocked，避免瞬移
+    if not path or len(path) <= 1:
+        amr.path = []
+        amr.blocked = True
+        amr.waypoint_idx = 0
+        amr.move_budget = 0.0
+        _update_route_artist(amr)
+        return
+
+    amr.path = path
+    amr.blocked = False
+    amr.waypoint_idx = 1
+    amr.move_budget = 0.0          # ★ 換路徑時也清掉 budget
+    _update_route_artist(amr)
+
+
+
+def plan_path_to_home(amr: AMRState, amrs: Dict[int, AMRState]):
+    """Plan a path from current AMR position back to its start position."""
+    home = START_POS.get(amr.amr_id)
+    if home is None:
+        amr.path = []
+        amr.waypoint_idx = 0
+        _update_route_artist(amr)
+        return
+    _plan_path_with_parking(amr, amrs, home)
+
+
 def plan_path_to_material(amr: AMRState, amrs: Dict[int, AMRState]):
     """Plan a path from current AMR position to its material station (based on job type)."""
     if amr.job is None:
@@ -311,14 +397,8 @@ def plan_path_to_material(amr: AMRState, amrs: Dict[int, AMRState]):
         _update_route_artist(amr)
         return
 
-    start = cur_cell(amr)
     goal = MAT_POS[jtype]
-    blocked = _build_blocked_for(amr, amrs)
-
-    amr.path = astar_8dir(start, goal, blocked)
-    amr.blocked = len(amr.path) < 1
-    amr.waypoint_idx = 1  # index 0 is current cell
-    _update_route_artist(amr)
+    _plan_path_with_parking(amr, amrs, goal)
 
 
 def plan_path_to_station(amr: AMRState,
@@ -333,13 +413,7 @@ def plan_path_to_station(amr: AMRState,
         _update_route_artist(amr)
         return
     goal = STATION_POS[station_id]
-
-    blocked = _build_blocked_for(amr, amrs)
-
-    amr.path = astar_8dir(start, goal, blocked)
-    amr.blocked = len(amr.path) < 1
-    amr.waypoint_idx = 1
-    _update_route_artist(amr)
+    _plan_path_with_parking(amr, amrs, goal)
 
 
 # ---------- Assignment ingestion ----------
@@ -387,8 +461,10 @@ def ingest_new_assignments(amrs: Dict[int, AMRState]) -> bool:
     if added > 0:
         for amr in amrs.values():
             if amr.state == "idle" and amr.job is None:
+                # **********
+                amr.blocked = True
+                # **********
                 try_start_next_job(amr, amrs)
-
     return added > 0
 
 
@@ -432,8 +508,19 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
       - phase == "supply": we just arrived at material station -> refill inventory for this job type, then go deliver.
       - phase == "deliver": we just arrived at production station -> consume 1 unit of material and finish the job.
     """
+    if amr.phase == "go_home":
+        print(f"[info] AMR{amr.amr_id} arrived home at {cur_cell(amr)}")
+        amr.state = "idle"
+        amr.phase = None
+        amr.path = []
+        amr.waypoint_idx = 0
+        _update_route_artist(amr)
+        try_start_next_job(amr, amrs)
+        return
+    
     if amr.job is None:
         amr.state = "idle"
+        # amr.blocked = True
         amr.phase = None
         amr.path = []
         amr.waypoint_idx = 0
@@ -484,6 +571,9 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
         # Start next job if any
         try_start_next_job(amr, amrs)
         return
+    
+    # if amr.phase == "go_home":
+        
 
     # Fallback: unknown phase
     amr.state = "idle"
@@ -504,6 +594,23 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
                 plan_path_to_material(st, amrs)
             elif st.phase == "deliver":
                 plan_path_to_station(st, st.job.station, amrs)
+        elif (
+            st.state == "idle"
+            and st.job is None
+            and not st.queue
+            and st.phase is None
+        ):
+            cell = cur_cell(st)
+            home = START_POS.get(st.amr_id)
+            # 只在「站點上」且「不在家」的時候啟動回家
+            if (
+                home is not None
+                and cell != home
+                and (cell in STATION_POS.values() or cell in MAT_POS.values())
+            ):
+                st.phase = "go_home"
+                st.state = "move"
+                plan_path_to_home(st, amrs)
 
     budget = CELLS_PER_SEC * dt
     # accumulate budget
@@ -525,11 +632,42 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
             st.posx, st.posy = float(nxt[0]), float(nxt[1])
             AMR_LOCATIONS.add((round(st.posx), round(st.posy)))
 
+                        # 這一步是不是這條 path 的最後一步？
+            last_step = (st.waypoint_idx == len(st.path) - 1)
+
             st.waypoint_idx += 1
             st.move_budget -= CELLS_PER_SEC * dt
-            if st.waypoint_idx >= len(st.path):
-                # reached target of this leg
-                on_arrival(st, amrs)
+
+            if last_step:
+                # 這一格就是這條 path 的終點
+                dest = nxt
+
+                # 判斷是不是「真正的站點」（生產站 or 物料站）
+                is_station = (
+                    st.job is not None
+                    and dest == STATION_POS.get(st.job.station, (-999, -999))
+                )
+                is_material = (
+                    st.job is not None
+                    and dest == MAT_POS.get(st.job.jtype.upper(), (-999, -999))
+                )
+                
+                home = START_POS.get(st.amr_id, (-999, -999))
+                is_home = (st.phase == "go_home" and dest == home)
+
+                if is_station or is_material or is_home:
+                    # 真正到站 → 走原本的供料/出貨邏輯
+                    on_arrival(st, amrs)
+                else:
+                    # 只是停在目標旁邊一格（parking）
+                    # 不算 job 完成，保持 phase 不變，等之後重新規劃
+                    st.path = []
+                    st.waypoint_idx = 0
+                    st.move_budget = 0.0
+                    # st.blocked = True
+                    _update_route_artist(st)
+                    # 注意：state 我們保持 "move"，這樣下一個 tick 還會幫它重新規劃路徑
+
                 break
 
 
@@ -606,11 +744,7 @@ def create_amrs(ax) -> Dict[int, AMRState]:
     """Create AMRs at some initial positions."""
     amrs: Dict[int, AMRState] = {}
     # simple starting positions; adjust as you like
-    starts = {
-        1: (2.0, 1.0),
-        2: (2.0, 4.0),
-        3: (2.0, 7.0),
-    }
+    
 
     # fixed colors per AMR for route lines
     color_map = {
@@ -620,7 +754,7 @@ def create_amrs(ax) -> Dict[int, AMRState]:
     }
 
     for i in range(1, AMR_COUNT + 1):
-        x, y = starts.get(i, (1.0, 1.0))
+        x, y = START_POS.get(i, (1.0, 1.0))
         st = AMRState(
             amr_id=i,
             posx=x,
@@ -696,7 +830,7 @@ def main():
             transform=fig.transFigure,
         )
 
-    is_running = True
+    is_running = False
     sim_t = 0.0
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
@@ -708,7 +842,7 @@ def main():
                 if cur_cell(st_i) == cur_cell(st_j) and i != j:
                     print(f"AMR{i} and {j} collide at {cur_cell(st_i)}!!!")
                     return 0
-                    
+        
                 
         nonlocal is_running, sim_t, timer_text, status_texts
         changed = False
@@ -741,7 +875,7 @@ def main():
                     blocked_string = "blocked"
                 else:
                     blocked_string = "unblocked"
-                status_str = f"AMR{k}: {state_str}, {blocked_string}, {phase_str}, {inv_str}, {st.posx} {st.posy}"
+                status_str = f"AMR{k}: {state_str}, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx} y:{st.posy})"
 
                 # label above the AMR
                 if st.label:
