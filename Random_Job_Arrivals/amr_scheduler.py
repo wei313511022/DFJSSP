@@ -93,36 +93,36 @@ def rebuild_top_lane(ax):
     x = LEFT_LABEL_PAD
     for j in waiting:
         r = Rectangle((x, 1.25),
-                      j.proc_time, TOP_LANE_H,
+                      j.proc_time/2.0, TOP_LANE_H,
                       linewidth=1.2, edgecolor="black",
                       facecolor=TYPE_COLORS.get(j.jtype, "C3"),
                       clip_on=True)
         ax.add_patch(r); rects_top.append(r)
-        t = ax.text(x + j.proc_time/2.0, 1.5,
-                    f"J{j.jid} ({j.jtype})",
+        t = ax.text(x + j.proc_time/4.0, 1.5,
+                    f"J_{j.jid} ({j.jtype})",
                     ha="center", va="center",
                     fontsize=9, weight="bold",
                     clip_on=True)
         texts_top.append(t)
-        x += j.proc_time
+        x += j.proc_time/2.0
 
 def draw_on_amr(ax, amr_id: int, j: Job):
     """Draw one assigned job on an AMR lane at that lane's cursor."""
     x = amr_cursor[amr_id]
     y = AMR_Y_CENTERS[amr_id-1]
     r = Rectangle((x, y - AMR_LANE_H/2.0),
-                  j.proc_time, AMR_LANE_H,
+                  j.proc_time/4.0, AMR_LANE_H,
                   linewidth=1.2, edgecolor="black",
                   facecolor=TYPE_COLORS.get(j.jtype, "C3"),
                   clip_on=True)
     ax.add_patch(r); amr_rects[amr_id].append(r)
-    t = ax.text(x + j.proc_time/2.0, y,
-                f"J{j.jid} ({j.jtype})",
+    t = ax.text(x + j.proc_time/8.0, y,
+                f"J_{j.jid}",
                 ha="center", va="center",
                 fontsize=9, weight="bold",
                 clip_on=True)
     amr_texts[amr_id].append(t)
-    amr_cursor[amr_id] += j.proc_time  # lane grows to the right
+    amr_cursor[amr_id] += j.proc_time/4.0  # lane grows to the right
 
 def fifo_dispatch(ax):
     """While we have waiting jobs, pop FIFO and assign to earliest-available AMR."""
@@ -180,7 +180,7 @@ def draw_static_panels(ax):
     ax.add_patch(top_panel)
     tp = ax.text(band_frac*0.5, 0.75, "Dispatching\nQueue",
                  transform=ax.transAxes, ha="center", va="center",
-                 fontsize=8, weight="bold", color="gray",
+                 fontsize=10, weight="bold", color="gray",
                  clip_on=True, zorder=4)
     tp.set_clip_path(top_panel)
 

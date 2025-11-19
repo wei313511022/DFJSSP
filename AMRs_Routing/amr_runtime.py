@@ -60,13 +60,38 @@ ALL_STATIONS: Set[Tuple[int, int]] = {
 }
 
 # Optional: static obstacles
-OBSTACLES: Set[Tuple[int, int]] = set()
+OBSTACLES: Set[Tuple[int, int]] = {
+    (5, 0),
+    (5, 1),
+    (5, 2),
+    (5, 4),
+    (5, 5),
+    (5, 6),
+    (5, 8),
+    (5, 9),
+    (3, 0),
+    (3, 1),
+    (3, 3),
+    (3, 4),
+    (3, 5),
+    (3, 7),
+    (3, 8),
+    (7, 0),
+    (7, 1),
+    (7, 3),
+    (7, 4),
+    (7, 5),
+    (7, 7),
+    (7, 8),
+    
+}
+
 
 # Dynamic AMR occupancy: holds (x, y) int grid cells where AMRs currently are
 AMR_LOCATIONS: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
-UPDATE_INTERVAL_MS = 200         # timer tick in ms
+UPDATE_INTERVAL_MS = 100         # timer tick in ms
 SIM_SPEED_MULT     = 1.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
@@ -284,8 +309,8 @@ def _build_blocked_for(amr: AMRState, amrs: Dict[int, AMRState]) -> Set[Coord]:
 
         # If other has higher priority, it's an obstacle (current + next cell)
         if amr_priority(other_id) > my_pri:
-            if in_bounds(*ocell):
-                blocked.add(ocell)
+            # if in_bounds(*ocell):
+            #     blocked.add(ocell)
 
             if (
                 other.state == "move"
@@ -367,7 +392,6 @@ def _plan_path_with_parking(amr: AMRState,
     amr.waypoint_idx = 1
     amr.move_budget = 0.0          # ★ 換路徑時也清掉 budget
     _update_route_artist(amr)
-
 
 
 def plan_path_to_home(amr: AMRState, amrs: Dict[int, AMRState]):
@@ -462,7 +486,7 @@ def ingest_new_assignments(amrs: Dict[int, AMRState]) -> bool:
         for amr in amrs.values():
             if amr.state == "idle" and amr.job is None:
                 # **********
-                amr.blocked = True
+                # amr.blocked = True
                 # **********
                 try_start_next_job(amr, amrs)
     return added > 0
@@ -511,6 +535,7 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
     if amr.phase == "go_home":
         print(f"[info] AMR{amr.amr_id} arrived home at {cur_cell(amr)}")
         amr.state = "idle"
+        amr.blocked = True
         amr.phase = None
         amr.path = []
         amr.waypoint_idx = 0
@@ -571,8 +596,7 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
         # Start next job if any
         try_start_next_job(amr, amrs)
         return
-    
-    # if amr.phase == "go_home":
+
         
 
     # Fallback: unknown phase
@@ -587,30 +611,32 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
 
 def simple_step(amrs: Dict[int, AMRState], dt: float):
     # Replan routes for moving AMRs each tick (priority-aware obstacles)
-    
-    for st in amrs.values():
-        if st.state == "move" and st.job is not None:
-            if st.phase == "supply":
-                plan_path_to_material(st, amrs)
-            elif st.phase == "deliver":
-                plan_path_to_station(st, st.job.station, amrs)
-        elif (
-            st.state == "idle"
-            and st.job is None
-            and not st.queue
-            and st.phase is None
-        ):
-            cell = cur_cell(st)
-            home = START_POS.get(st.amr_id)
-            # 只在「站點上」且「不在家」的時候啟動回家
-            if (
-                home is not None
-                and cell != home
-                and (cell in STATION_POS.values() or cell in MAT_POS.values())
-            ):
-                st.phase = "go_home"
-                st.state = "move"
+    for i in range(2):
+        for st in amrs.values():
+            if st.state == "move" and st.job is not None:
+                if st.phase == "supply":
+                    plan_path_to_material(st, amrs)
+                elif st.phase == "deliver":
+                    plan_path_to_station(st, st.job.station, amrs)
+            elif st.phase == "go_home":
                 plan_path_to_home(st, amrs)
+            elif (
+                st.state == "idle"
+                and st.job is None
+                and not st.queue
+                and st.phase is None
+            ):
+                cell = cur_cell(st)
+                home = START_POS.get(st.amr_id)
+                # 只在「站點上」且「不在家」的時候啟動回家
+                if (
+                    home is not None
+                    and cell != home
+                    and (cell in STATION_POS.values() or cell in MAT_POS.values())
+                ):
+                    st.phase = "go_home"
+                    st.state = "move"
+                    plan_path_to_home(st, amrs)
 
     budget = CELLS_PER_SEC * dt
     # accumulate budget
@@ -807,7 +833,7 @@ def main():
     # Timer text above the map (figure coordinates)
     timer_text = fig.text(
         0.5, 0.9,
-        "Simulation time: 0.0 s",
+        "Route Map",
         ha="center",
         va="bottom",
         fontsize=16,
@@ -830,7 +856,7 @@ def main():
             transform=fig.transFigure,
         )
 
-    is_running = False
+    is_running = True
     sim_t = 0.0
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
@@ -886,7 +912,8 @@ def main():
                 status_texts[k].set_text(status_str)
 
             # update timer text
-            timer_text.set_text(f"Simulation time: {sim_t:6.1f} s")
+            # timer_text.set_text(f"Simulation time: {sim_t:6.1f} s")
+            
 
             changed = True
 
