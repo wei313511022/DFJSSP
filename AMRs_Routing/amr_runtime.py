@@ -61,29 +61,9 @@ ALL_STATIONS: Set[Tuple[int, int]] = {
 
 # Optional: static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (5, 5),
-    (5, 6),
-    (5, 8),
-    (5, 9),
-    (3, 0),
-    (3, 1),
-    (3, 3),
-    (3, 4),
-    (3, 5),
-    (3, 7),
-    (3, 8),
-    (7, 0),
-    (7, 1),
-    (7, 3),
-    (7, 4),
-    (7, 5),
-    (7, 7),
-    (7, 8),
-    
+    (5, 0),(5, 1),(5, 2),(5, 4),(5, 5),(5, 6),(5, 8),(5, 9),
+    (3, 0),(3, 1),(3, 3),(3, 4),(3, 5),(3, 7),(3, 8),
+    (7, 0),(7, 1),(7, 3),(7, 4),(7, 5),(7, 7),(7, 8),
 }
 
 
@@ -91,7 +71,7 @@ OBSTACLES: Set[Tuple[int, int]] = {
 AMR_LOCATIONS: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
-UPDATE_INTERVAL_MS = 100         # timer tick in ms
+UPDATE_INTERVAL_MS = 200         # timer tick in ms
 SIM_SPEED_MULT     = 1.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
