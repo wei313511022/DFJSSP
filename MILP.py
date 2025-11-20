@@ -306,7 +306,7 @@ def rebuild_top_lane(ax):
         t = ax.text(
             x + j.proc_time / 4.0,
             TOP_Y_CENTER + TOP_LANE_H / 2.0,
-            f"J_{j.jid} ({j.jtype})",
+            f"J_{j.jid}",
             ha="center",
             va="center",
             fontsize=9,
@@ -368,7 +368,7 @@ def draw_static_panels(ax):
         transform=ax.transAxes,
         ha="center",
         va="center",
-        fontsize=10,
+        fontsize=9,
         weight="bold",
         color="gray",
         clip_on=True,

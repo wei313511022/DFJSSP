@@ -39,7 +39,7 @@ def append_dispatch_inbox(jobs, dispatch_time):
 
 
 # --------------------------- Config ---------------------------
-AVG_INTERARRIVAL_TIME = 5.0
+AVG_INTERARRIVAL_TIME = 3.0
 SIM_SPEED_MULTIPLIER   = 1.0
 UPDATE_INTERVAL_MS     = 200
 
@@ -226,11 +226,11 @@ def draw_static_decor(ax):
     job_txt = ax.text(
         band_frac * 0.5,
         0.5,
-        "Job Queue",
+        "Job\nQueue",
         transform=ax.transAxes,
         ha="center",
         va="center",
-        fontsize=11,
+        fontsize=9,
         weight="bold",
         color="gray",
         clip_on=True,
