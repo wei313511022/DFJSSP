@@ -1,0 +1,5 @@
+{"generated_at": 38.60000000000001, "amr": 3, "jid": 20, "type": "B", "proc_time": 15.0, "station": "3"}
+{"generated_at": 38.60000000000001, "amr": 1, "jid": 21, "type": "C", "proc_time": 20.0, "station": "1"}
+{"generated_at": 38.60000000000001, "amr": 2, "jid": 23, "type": "A", "proc_time": 10.0, "station": "2"}
+{"generated_at": 38.60000000000001, "amr": 2, "jid": 22, "type": "C", "proc_time": 20.0, "station": "1"}
+{"generated_at": 38.60000000000001, "amr": 3, "jid": 24, "type": "B", "proc_time": 15.0, "station": "2"}
