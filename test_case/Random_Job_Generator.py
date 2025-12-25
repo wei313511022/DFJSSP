@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# usage: python3 Random_Job_Generator.py --batches 10 --size 15
 import json
 import random
 import time
