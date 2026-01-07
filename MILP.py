@@ -26,7 +26,7 @@ MAT_CAPACITY = 10  # Each pickup action gives 10 units
 MAT_INVENTORY_CAPACITY = 30  # Max material each AMR can carry (3 types * 10 units)
 
 # Paths
-INBOX = "dispatch_inbox_5Jobs_generation.jsonl"
+INBOX = "test_case/dispatch_inbox_5.jsonl"
 SCHEDULE_OUTBOX = "Random_Job_Arrivals/schedule_outbox.jsonl"
 
 
