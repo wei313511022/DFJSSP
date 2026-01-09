@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import os
 import json
-import time
+import time as pytime
 from dataclasses import dataclass
 from typing import List, Dict
+from collections import deque
+from functools import lru_cache
 
 import gurobipy as gp
 from gurobipy import GRB
@@ -12,51 +14,110 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
 
 # ===================== MILP CONFIG / LOGIC (from MILP.py) =====================
-
-TIME_LIMIT = 3600
+TIME_LIMIT = None
 GRID_SIZE = 10
-P_NODES = {1, 6, 10}  # pickup candidate nodes 
-JSON_STATION_MAPPING = {1: 93, 2: 96, 3: 98}  # delivery nodes
+TYPE_TO_MATERIAL_NODE = {"A": 7, "B": 4, "C": 1}
+MATERIAL_PICK_QTY = 3  # each pickup replenishes 3 units of the same material
+P_NODES = set(TYPE_TO_MATERIAL_NODE.values())  # material pickup nodes
+JSON_STATION_MAPPING = {5: 91, 4: 93, 3: 95, 2: 97, 1: 99}  # delivery nodes
 M_SET = range(1, 4)   # 3 AGVs
-S_m = {1: 1, 2: 6, 3: 10}  # AGV start nodes
+S_m = {1: 1, 2: 6, 3: 10}  # AGV start nodes 
 
-# Material management config
-MAT_TYPE_TO_PICKUP = {"A": 1, "B": 6, "C": 10}  # Material type -> pickup node
-MAT_CAPACITY = 10  # Each pickup action gives 10 units
-MAT_INVENTORY_CAPACITY = 30  # Max material each AMR can carry (3 types * 10 units)
+# Barrier nodes (AGVs cannot traverse these grid nodes)
+BARRIER_NODES = {61, 63, 65, 66, 67, 69, 70}
+
+# Basic validation: key nodes must not be barriers
+_fixed_nodes_to_check = set(S_m.values()) | set(TYPE_TO_MATERIAL_NODE.values()) | set(JSON_STATION_MAPPING.values())
+_bad_fixed = sorted(int(n) for n in _fixed_nodes_to_check if int(n) in BARRIER_NODES)
+if _bad_fixed:
+    raise ValueError(f"Barrier nodes overlap with fixed start/pickup/delivery nodes: {_bad_fixed}")
 
 # Paths
 INBOX = "dispatch_inbox.jsonl"
 SCHEDULE_OUTBOX = "Random_Job_Arrivals/schedule_outbox.jsonl"
 
 
-def calculate_distance(node1, node2, grid_size=GRID_SIZE):
-    r1, c1 = (node1 - 1) // grid_size, (node1 - 1) % grid_size
-    r2, c2 = (node2 - 1) // grid_size, (node2 - 1) % grid_size
-    return abs(r1 - r2) + abs(c1 - c2)
+def calculate_distance(node1, node2, grid_size=GRID_SIZE, barriers=None):
+    """Shortest 4-neighbor grid distance avoiding barrier nodes.
+
+    Performance note: during MILP construction this function can be called many times.
+    To keep model-build time low, we cache pairwise distances when using the default
+    (global) barrier set.
+    """
+
+    n1 = int(node1)
+    n2 = int(node2)
+    if barriers is None or barriers == BARRIER_NODES:
+        return _calculate_distance_cached(n1, n2)
+    return _calculate_distance_uncached(n1, n2, grid_size=grid_size, barriers=barriers)
+
+
+def _neighbors(node: int, grid_size: int):
+    r, c = (node - 1) // grid_size, (node - 1) % grid_size
+    if r > 0:
+        yield node - grid_size
+    if r < grid_size - 1:
+        yield node + grid_size
+    if c > 0:
+        yield node - 1
+    if c < grid_size - 1:
+        yield node + 1
+
+
+def _calculate_distance_uncached(n1: int, n2: int, *, grid_size: int, barriers):
+    if n1 == n2:
+        return 0
+
+    barriers_set = set(int(b) for b in barriers)
+    if n1 in barriers_set or n2 in barriers_set:
+        raise ValueError(f"No path: start/end is a barrier (start={n1}, end={n2})")
+
+    max_node = grid_size * grid_size
+    if not (1 <= n1 <= max_node and 1 <= n2 <= max_node):
+        raise ValueError(f"Node out of bounds for grid {grid_size}x{grid_size}: {n1}, {n2}")
+
+    q = deque([n1])
+    dist = {n1: 0}
+    while q:
+        cur = q.popleft()
+        d = dist[cur]
+        for nb in _neighbors(cur, grid_size):
+            if nb in barriers_set:
+                continue
+            if nb in dist:
+                continue
+            nd = d + 1
+            if nb == n2:
+                return nd
+            dist[nb] = nd
+            q.append(nb)
+
+    raise ValueError(f"No path found from {n1} to {n2} with barriers={sorted(barriers_set)}")
+
+
+@lru_cache(maxsize=None)
+def _calculate_distance_cached(n1: int, n2: int):
+    # BARRIER_NODES and GRID_SIZE are treated as constants for caching.
+    return _calculate_distance_uncached(n1, n2, grid_size=GRID_SIZE, barriers=BARRIER_NODES)
 
 
 def solve_vrp_from_jobs(
-    # Global variables
     jobs,
     agv_available_time=None,
     agv_current_node=None,
-    station_available_time=None, 
-    material_inventory=None,
+    station_available_time=None,
     time_limit=TIME_LIMIT,
 ):
     if not jobs:
         return None
 
-    # Global-state inputs initialization
+    # Global-state inputs
     if agv_available_time is None:
         agv_available_time = {m: 0.0 for m in M_SET}
     if agv_current_node is None:
         agv_current_node = {m: int(S_m[m]) for m in M_SET}
     if station_available_time is None:
         station_available_time = {int(n): 0.0 for n in JSON_STATION_MAPPING.values()}
-    if material_inventory is None:
-        material_inventory = {m: {"A": 0, "B": 0, "C": 0} for m in M_SET}
 
     L_REAL = [j["jid"] for j in jobs]
     n_tasks = len(L_REAL)
@@ -68,57 +129,57 @@ def solve_vrp_from_jobs(
     TASK_DATA = {}
     for idx in L_SET:
         job = next(j for j in jobs if j["jid"] == L_REAL_MAP[idx])
-        job_type = str(job.get("type", "?"))
+        jtype = str(job.get("type", "?")).upper()
+        g_l = int(job["g_l"])
+        if g_l in BARRIER_NODES:
+            raise ValueError(f"Job delivery node is a barrier: jid={job.get('jid')} g_l={g_l}")
         TASK_DATA[idx] = {
             "E_l": float(job["proc_time"]),
-            "g_l": int(job["g_l"]),
-            "type": job_type,
+            "g_l": g_l,
+            "type": jtype,
             "arrival_time": float(job.get("arrival_time", 0.0)),
-            "mat_pickup_node": MAT_TYPE_TO_PICKUP.get(job_type, None),
         }
 
     # event-specific Big-M
     delivery_nodes = [TASK_DATA[i]["g_l"] for i in L_SET]
-    # Allow "no pickup" by letting the pickup-node decision choose the predecessor location.
-    # This enables direct station->station travel when material is already on-board.
-    pick_nodes = set(int(x) for x in P_NODES)
-    pick_nodes.update(int(x) for x in delivery_nodes)
-    pick_nodes.update(int(x) for x in S_m.values())
-    pick_nodes.update(int(x) for x in agv_current_node.values())
-    PICK_NODES = sorted(pick_nodes)
-
-    D_max = max(calculate_distance(p, g) for p in PICK_NODES for g in delivery_nodes)
-    S_max = max(calculate_distance(s, p) for s in S_m.values() for p in PICK_NODES)
+    D_max = max(calculate_distance(p, g) for p in P_NODES for g in delivery_nodes)
+    S_max = max(calculate_distance(s, p) for s in S_m.values() for p in P_NODES)
     E_sum = sum(TASK_DATA[i]["E_l"] for i in L_SET)
     M_local = max(1.0, float(S_max + n_tasks * D_max + E_sum + 5.0))
 
     model = gp.Model("Reschedule_event")
-    model.Params.TimeLimit = time_limit
+    if time_limit is not None:
+        model.Params.TimeLimit = float(time_limit)
     model.Params.MIPGap = 0.0
     model.Params.OutputFlag = 1
+    # Helpful when you care about proving optimality (may take longer to find first feasible).
+    try:
+        model.Params.MIPFocus = 2
+        model.Params.Presolve = 2
+        model.Params.Cuts = 2
+    except Exception:
+        pass
 
     Y = model.addVars(L_SET, M_SET, vtype=GRB.BINARY, name="Y")
     W = model.addVars(L_PRIME, L_PRIME, M_SET, vtype=GRB.BINARY, name="W")
-    A_P = model.addVars(L_SET, PICK_NODES, vtype=GRB.BINARY, name="A")
+
+    # Material replenishment & inventory (single material type carried at a time)
+    # - Each job consumes 1 unit of its type.
+    # - When inventory is empty (0), AMR may go to the type's material node and replenish 3 units.
+    # - AMR cannot replenish early (i.e., only when inventory is empty).
+    # Inventory is tracked as remaining units AFTER completing each job, so domain is [0, 2].
+    R_refill = model.addVars(L_SET, vtype=GRB.BINARY, name="R_refill")
+    Q_after = model.addVars(
+        L_SET,
+        vtype=GRB.INTEGER,
+        lb=0,
+        ub=MATERIAL_PICK_QTY - 1,
+        name="Q_after",
+    )
     T_Pick = model.addVars(L_SET, lb=0.0, name="T_pick")
     T_Del = model.addVars(L_SET, lb=0.0, name="T_del")
     T_End = model.addVars(L_SET, lb=0.0, name="T_end")
     T_makespan = model.addVar(lb=0.0, name="T_makespan")
-
-    # Material refill decision: R[l,m]=1 means AMR m refills the job's material type before job l.
-    R = model.addVars(L_SET, M_SET, vtype=GRB.BINARY, name="R_refill")
-
-    # Per-type inventory AFTER completing job l on AMR m.
-    MAT_TYPES = ("A", "B", "C")
-    Inv = model.addVars(
-        L_SET,
-        M_SET,
-        MAT_TYPES,
-        vtype=GRB.INTEGER,
-        lb=0,
-        ub=int(MAT_CAPACITY),
-        name="Inv",
-    )
     
     # Station occupancy constraints - AGVs cannot be at same station simultaneously
     T_Station_Start = model.addVars(L_SET, lb=0.0, name="T_station_start")
@@ -143,144 +204,17 @@ def solve_vrp_from_jobs(
         model.setObjective(T_makespan + 1e-4 * gp.quicksum(T_End[l] for l in L_SET), GRB.MINIMIZE)
 
     model.addConstrs(
-        (gp.quicksum(A_P[l, p] for p in PICK_NODES) == 1 for l in L_SET),
-        name="one_pick",
-    )
-    model.addConstrs(
         (gp.quicksum(Y[l, m] for m in M_SET) == 1 for l in L_SET),
         name="assign",
     )
 
-    # Refill only makes sense on the assigned AMR
-    model.addConstrs((R[l, m] <= Y[l, m] for l in L_SET for m in M_SET), name="refill_link")
-
-    # If refilling for job l, force its pickup-node to be the material pickup node for that type.
-    # If not refilling, forbid choosing that material pickup node (prevents unnecessary detours).
+    # Validate job types and precompute each job's material node (fixed by type)
+    material_node_of_l = {}
     for l in L_SET:
-        job_type = TASK_DATA[l]["type"]
-        mat_node = MAT_TYPE_TO_PICKUP.get(job_type)
-        if mat_node is None:
-            continue
-        rsum = gp.quicksum(R[l, m] for m in M_SET)
-        model.addConstr(A_P[l, int(mat_node)] == rsum, name=f"refill_pick_node_{l}")
-
-    # If NOT refilling, enforce that the chosen "pickup node" equals the current AMR location:
-    # - If predecessor is job lp, the current location is lp's delivery node.
-    # - If predecessor is virtual start 0, the current location is the AMR's current node.
-    # This guarantees direct station->station travel between consecutive jobs of the same AMR.
-    for l in L_SET:
-        for lp in L_SET:
-            if lp == l:
-                continue
-            prev_node = int(TASK_DATA[lp]["g_l"])
-            if prev_node not in PICK_NODES:
-                continue
-            for m in M_SET:
-                model.addConstr(
-                    A_P[l, prev_node] >= W[lp, l, m] - R[l, m],
-                    name=f"direct_pick_prev_{lp}_{l}_{m}",
-                )
-        for m in M_SET:
-            start_node = int(agv_current_node.get(m, S_m[m]))
-            if start_node in PICK_NODES:
-                model.addConstr(
-                    A_P[l, start_node] >= W[0, l, m] - R[l, m],
-                    name=f"direct_pick_start_{l}_{m}",
-                )
-
-    # Inventory constraints: material is consumed by each job (1 unit of that job's type).
-    # A refill sets that type's inventory to MAT_CAPACITY before consuming (so after job it is MAT_CAPACITY-1).
-    BIG_INV = int(max(20, MAT_CAPACITY + 10))
-    init_inv = {
-        m: {t: int(material_inventory.get(m, {}).get(t, 0)) for t in MAT_TYPES}
-        for m in M_SET
-    }
-
-    for l in L_SET:
-        t_l = str(TASK_DATA[l]["type"])
-        for m in M_SET:
-            for t in MAT_TYPES:
-                if t != t_l:
-                    # Other material types carry over unchanged along the chosen predecessor arc.
-                    for lp in L_SET:
-                        if lp == l:
-                            continue
-                        model.addConstr(
-                            Inv[l, m, t] <= Inv[lp, m, t] + BIG_INV * (1 - W[lp, l, m]),
-                            name=f"inv_carry_ub_{t}_{lp}_{l}_{m}",
-                        )
-                        model.addConstr(
-                            Inv[l, m, t] >= Inv[lp, m, t] - BIG_INV * (1 - W[lp, l, m]),
-                            name=f"inv_carry_lb_{t}_{lp}_{l}_{m}",
-                        )
-                    model.addConstr(
-                        Inv[l, m, t] <= init_inv[m][t] + BIG_INV * (1 - W[0, l, m]),
-                        name=f"inv_carry0_ub_{t}_{l}_{m}",
-                    )
-                    model.addConstr(
-                        Inv[l, m, t] >= init_inv[m][t] - BIG_INV * (1 - W[0, l, m]),
-                        name=f"inv_carry0_lb_{t}_{l}_{m}",
-                    )
-                else:
-                    # The job's own type: either refill, or consume from previous inventory.
-                    # Refill case fixes inventory after the job.
-                    model.addConstr(
-                        Inv[l, m, t] <= (MAT_CAPACITY - 1) + BIG_INV * (1 - R[l, m]),
-                        name=f"inv_refill_ub_{t}_{l}_{m}",
-                    )
-                    model.addConstr(
-                        Inv[l, m, t] >= (MAT_CAPACITY - 1) - BIG_INV * (1 - R[l, m]),
-                        name=f"inv_refill_lb_{t}_{l}_{m}",
-                    )
-
-                    # No-refill case: Inv = Inv_prev - 1 on the chosen predecessor arc.
-                    for lp in L_SET:
-                        if lp == l:
-                            continue
-                        model.addConstr(
-                            Inv[l, m, t]
-                            <= Inv[lp, m, t]
-                            - 1
-                            + BIG_INV * (1 - W[lp, l, m])
-                            + BIG_INV * R[l, m],
-                            name=f"inv_noref_ub_{t}_{lp}_{l}_{m}",
-                        )
-                        model.addConstr(
-                            Inv[l, m, t]
-                            >= Inv[lp, m, t]
-                            - 1
-                            - BIG_INV * (1 - W[lp, l, m])
-                            - BIG_INV * R[l, m],
-                            name=f"inv_noref_lb_{t}_{lp}_{l}_{m}",
-                        )
-                        # If no refill and this arc is chosen, predecessor inventory must be >= 1.
-                        model.addConstr(
-                            Inv[lp, m, t] >= 1 - BIG_INV * (1 - W[lp, l, m]) - BIG_INV * R[l, m],
-                            name=f"inv_need1_{t}_{lp}_{l}_{m}",
-                        )
-
-                    # Start predecessor (lp=0): use initial inventory.
-                    model.addConstr(
-                        Inv[l, m, t]
-                        <= init_inv[m][t]
-                        - 1
-                        + BIG_INV * (1 - W[0, l, m])
-                        + BIG_INV * R[l, m],
-                        name=f"inv0_noref_ub_{t}_{l}_{m}",
-                    )
-                    model.addConstr(
-                        Inv[l, m, t]
-                        >= init_inv[m][t]
-                        - 1
-                        - BIG_INV * (1 - W[0, l, m])
-                        - BIG_INV * R[l, m],
-                        name=f"inv0_noref_lb_{t}_{l}_{m}",
-                    )
-                    # If no refill and job starts from lp=0 on this AMR, initial inventory must be >= 1.
-                    model.addConstr(
-                        init_inv[m][t] >= 1 - BIG_INV * (1 - W[0, l, m]) - BIG_INV * R[l, m],
-                        name=f"inv0_need1_{t}_{l}_{m}",
-                    )
+        t = str(TASK_DATA[l].get("type", "?")).upper()
+        if t not in TYPE_TO_MATERIAL_NODE:
+            raise ValueError(f"Unsupported job type '{t}' for jid={L_REAL_MAP[l]} (expected A/B/C)")
+        material_node_of_l[l] = int(TYPE_TO_MATERIAL_NODE[t])
 
     for l in L_SET:
         model.addConstr(
@@ -350,6 +284,83 @@ def solve_vrp_from_jobs(
         (T_Pick[l] >= TASK_DATA[l]["arrival_time"] for l in L_SET),
         name="arrival",
     )
+
+    # Material constraints
+    # 1) If a job is the first one on an AMR, it must refill before serving it (inventory starts at 0).
+    for l in L_SET:
+        for m in M_SET:
+            model.addConstr(R_refill[l] >= W[0, l, m], name=f"first_refill_{l}_{m}")
+
+    # 2) Inventory transition + refill-only-when-empty rule
+    # Big-M for inventory domain [0,9]
+    M_inv = MATERIAL_PICK_QTY
+    for lp in L_SET:
+        for l in L_SET:
+            if lp == l:
+                continue
+
+            # If types differ, a refill must happen before l (cannot switch types otherwise)
+            if TASK_DATA[lp]["type"] != TASK_DATA[l]["type"]:
+                for m in M_SET:
+                    model.addConstr(
+                        W[lp, l, m] <= R_refill[l],
+                        name=f"type_change_requires_refill_{lp}_{l}_{m}",
+                    )
+
+            for m in M_SET:
+                # If we refill before l, then predecessor inventory must be empty
+                # Active when W[lp,l,m]=1 and R_refill[l]=1 -> Q_after[lp] == 0
+                model.addConstr(
+                    Q_after[lp] <= M_inv * (2 - W[lp, l, m] - R_refill[l]),
+                    name=f"refill_only_when_empty_ub_{lp}_{l}_{m}",
+                )
+
+                # If we do NOT refill before l, predecessor inventory must be >= 1
+                # Active when W=1 and R_refill[l]=0 -> Q_after[lp] >= 1
+                model.addConstr(
+                    Q_after[lp] >= 1 - M_inv * (1 - W[lp, l, m]) - M_inv * R_refill[l],
+                    name=f"no_refill_requires_stock_lb_{lp}_{l}_{m}",
+                )
+
+                # Refill transition: if W=1 and R_refill[l]=1 -> Q_after[l] = 9
+                model.addConstr(
+                    Q_after[l] >= (MATERIAL_PICK_QTY - 1) - M_inv * (2 - W[lp, l, m] - R_refill[l]),
+                    name=f"inv_refill_lb_{lp}_{l}_{m}",
+                )
+                model.addConstr(
+                    Q_after[l] <= (MATERIAL_PICK_QTY - 1) + M_inv * (2 - W[lp, l, m] - R_refill[l]),
+                    name=f"inv_refill_ub_{lp}_{l}_{m}",
+                )
+
+                # No-refill transition: if W=1 and R_refill[l]=0 -> Q_after[l] = Q_after[lp] - 1
+                model.addConstr(
+                    Q_after[l]
+                    >= Q_after[lp]
+                    - 1
+                    - M_inv * (1 - W[lp, l, m])
+                    - M_inv * R_refill[l],
+                    name=f"inv_consume_lb_{lp}_{l}_{m}",
+                )
+                model.addConstr(
+                    Q_after[l]
+                    <= Q_after[lp]
+                    - 1
+                    + M_inv * (1 - W[lp, l, m])
+                    + M_inv * R_refill[l],
+                    name=f"inv_consume_ub_{lp}_{l}_{m}",
+                )
+
+    # First-job inventory: if W[0,l,m]=1 then Q_after[l]=9 (because start inventory is 0, refill 10, consume 1)
+    for l in L_SET:
+        for m in M_SET:
+            model.addConstr(
+                Q_after[l] >= (MATERIAL_PICK_QTY - 1) - M_inv * (1 - W[0, l, m]),
+                name=f"first_inv_lb_{l}_{m}",
+            )
+            model.addConstr(
+                Q_after[l] <= (MATERIAL_PICK_QTY - 1) + M_inv * (1 - W[0, l, m]),
+                name=f"first_inv_ub_{l}_{m}",
+            )
     
     # Station occupancy time constraints
     model.addConstrs(
@@ -388,59 +399,74 @@ def solve_vrp_from_jobs(
         if prev_end > 0.0:
             model.addConstr(T_Del[l] >= prev_end, name=f"after_prev_station_{l}")
 
-    for l in L_SET:
-        g_l = TASK_DATA[l]["g_l"]
-        min_d = min(calculate_distance(pp, g_l) for pp in PICK_NODES)
-        for p in PICK_NODES:
-            d_pg = calculate_distance(p, g_l)
-            model.addConstr(
-                T_Del[l] >= T_Pick[l] + d_pg - M_local * (1 - A_P[l, p]),
-                name=f"trans_{l}_{p}",
-            )
-        model.addConstr(T_Del[l] >= T_Pick[l] + min_d, name=f"trans_lb_{l}")
+    # Travel-time constraints with optional refill/pickup
+    # Semantics:
+    # - If R_refill[l]=1: AMR must go to the material node for type(l) before delivering job l.
+    # - If R_refill[l]=0: AMR goes directly from predecessor delivery to this delivery (no pickup).
 
     for l in L_SET:
+        g_l = int(TASK_DATA[l]["g_l"])
+        p_l = int(material_node_of_l[l])
+        d_pick_to_del = calculate_distance(p_l, g_l)
+
+        # If we refill, delivery happens after reaching pickup node then traveling to delivery
+        model.addConstr(
+            T_Del[l] >= T_Pick[l] + d_pick_to_del - M_local * (1 - R_refill[l]),
+            name=f"refill_pick_to_del_{l}",
+        )
+
         for lp in L_SET:
             if lp == l:
                 continue
-            g_lp = TASK_DATA[lp]["g_l"]
-            for p in PICK_NODES:
-                d_dp = calculate_distance(g_lp, p)
-                model.addConstrs(
-                    (
-                        T_Pick[l]
-                        >= T_End[lp]
-                        + d_dp
-                        - M_local * (2 - W[lp, l, m] - A_P[l, p])
-                        for m in M_SET
-                    ),
-                    name=f"seq_{lp}_{l}_{p}",
-                )
-        for m in M_SET:
-            # This event starts from the AGV's current node and current available time (global timeline)
-            Snode = int(agv_current_node.get(m, S_m[m]))
-            t0 = float(agv_available_time.get(m, 0.0))
-            for p in PICK_NODES:
-                d_sp = calculate_distance(Snode, p)
+            g_lp = int(TASK_DATA[lp]["g_l"])
+            d_del_to_pick = calculate_distance(g_lp, p_l)
+            d_direct = calculate_distance(g_lp, g_l)
+            for m in M_SET:
+                # If we refill before l (W=1,R=1), reach pickup after predecessor ends + travel
                 model.addConstr(
-                    T_Pick[l]
-                    >= t0 + d_sp - M_local * (2 - W[0, l, m] - A_P[l, p]),
-                    name=f"start_seq_{l}_{m}_{p}",
+                    T_Pick[l] >= T_End[lp] + d_del_to_pick - M_local * (2 - W[lp, l, m] - R_refill[l]),
+                    name=f"seq_refill_to_pick_{lp}_{l}_{m}",
                 )
 
-    t_opt_start = time.perf_counter()
+                # If we do NOT refill before l (W=1,R=0), 'pickup time' is just the departure time from predecessor delivery
+                model.addConstr(
+                    T_Pick[l] >= T_End[lp] - M_local * ((1 - W[lp, l, m]) + R_refill[l]),
+                    name=f"seq_norefill_depart_{lp}_{l}_{m}",
+                )
+                model.addConstr(
+                    T_Del[l] >= T_Pick[l] + d_direct - M_local * ((1 - W[lp, l, m]) + R_refill[l]),
+                    name=f"seq_norefill_direct_{lp}_{l}_{m}",
+                )
+
+        # Start constraints (from each AMR's current node/time)
+        for m in M_SET:
+            Snode = int(agv_current_node.get(m, S_m[m]))
+            t0 = float(agv_available_time.get(m, 0.0))
+            d_sp = calculate_distance(Snode, p_l)
+            model.addConstr(
+                T_Pick[l] >= t0 + d_sp - M_local * (2 - W[0, l, m] - R_refill[l]),
+                name=f"start_refill_to_pick_{l}_{m}",
+            )
+
+    _t_wall_start = pytime.perf_counter()
     model.optimize()
-    solve_time = time.perf_counter() - t_opt_start
+    _t_wall = pytime.perf_counter() - _t_wall_start
+    # Prefer Gurobi-reported solve time; fall back to wall time.
+    try:
+        solve_time = float(model.Runtime)
+    except Exception:
+        solve_time = float(_t_wall)
+
     if model.SolCount == 0:
         return None
 
     # pull solution values
-    A_vals       = model.getAttr("X", A_P)
     Y_vals       = model.getAttr("X", Y)
-    R_vals       = model.getAttr("X", R)
     T_pick_vals  = model.getAttr("X", T_Pick)
     T_del_vals   = model.getAttr("X", T_Del)
     T_end_vals   = model.getAttr("X", T_End)
+    W_vals       = model.getAttr("X", W)
+    R_vals       = model.getAttr("X", R_refill)
 
     # build sequences per AMR directly from Y + times
     seq_map = {m: [] for m in M_SET}
@@ -461,12 +487,33 @@ def solve_vrp_from_jobs(
         del_t  = float(T_del_vals.get(l, 0.0))
         end_t  = float(T_end_vals.get(l, 0.0))
 
-        # chosen pickup node
+        # Determine the effective "pickup_node" for the delivery leg.
+        # - If refill happens for this job: pickup_node is the material node of the job type (A@7,B@4,C@1).
+        # - If no refill: pickup_node is the predecessor delivery node (direct travel).
         chosen_pick = None
-        for p in PICK_NODES:
-            if A_vals.get((l, p), 0.0) >= 0.5:
-                chosen_pick = p
-                break
+        refill_now = bool(R_vals.get(l, 0.0) >= 0.5)
+        if refill_now:
+            chosen_pick = int(material_node_of_l[l])
+        else:
+            pred_delivery = None
+            for lp in L_PRIME:
+                if lp == l:
+                    continue
+                for m in M_SET:
+                    if W_vals.get((lp, l, m), 0.0) >= 0.5:
+                        if lp == 0:
+                            pred_delivery = None
+                        elif lp == VIRTUAL_END:
+                            pred_delivery = None
+                        else:
+                            pred_delivery = int(TASK_DATA[int(lp)]["g_l"])
+                        break
+                if pred_delivery is not None or any(
+                    W_vals.get((lp, l, m), 0.0) >= 0.5 for m in M_SET
+                ):
+                    break
+            # If predecessor couldn't be resolved (shouldn't happen), fall back to type material node.
+            chosen_pick = int(pred_delivery) if pred_delivery is not None else int(material_node_of_l[l])
 
         delivery_node = TASK_DATA[l]["g_l"]
 
@@ -480,9 +527,6 @@ def solve_vrp_from_jobs(
         # Waiting time = (time from pick to arrival) - (true travel time)
         wait_time = max(0.0, float(del_t - pick_t) - float(transport_time))
         
-        # refill decision for this (l, m)
-        refilled = bool(R_vals.get((l, assigned_m), 0.0) >= 0.5)
-
         seq_map[assigned_m].append(
             {
                 "idx": l,
@@ -497,10 +541,6 @@ def solve_vrp_from_jobs(
                 "proc_time": float(TASK_DATA[l]["E_l"]),
                 "transport_time": transport_time,
                 "wait_time": wait_time,
-                "material_refill_required": bool(refilled),
-                "refill_pickup_node": int(MAT_TYPE_TO_PICKUP.get(TASK_DATA[l].get("type", "?")))
-                if refilled and MAT_TYPE_TO_PICKUP.get(TASK_DATA[l].get("type", "?")) is not None
-                else None,
             }
         )
 
@@ -531,26 +571,8 @@ def solve_vrp_from_jobs(
             if job.get("delivery_node") is not None:
                 prev_node = int(job.get("delivery_node"))
 
-    # Material inventory update (consistent with the model's refill decisions)
-    material_refill_events = {m: {} for m in M_SET}  # {m: {"A": refill_count, ...}}
-    for m in M_SET:
-        seq = seq_map.get(m, [])
-        for job in seq:
-            job_type = job.get("type", "?")
-            if job.get("material_refill_required", False):
-                material_refill_events[m][job_type] = material_refill_events[m].get(job_type, 0) + 1
-                material_inventory[m][job_type] = int(MAT_CAPACITY)
-            # Consume exactly 1 unit of this job's material type
-            material_inventory[m][job_type] = int(material_inventory[m].get(job_type, 0)) - 1
-            job["material_after_consume"] = int(material_inventory[m].get(job_type, 0))
-
     makespan = max(float(v) for v in T_end_vals.values()) if T_end_vals else 0.0
-    return {
-        "sequence_map": seq_map,
-        "makespan": float(makespan),
-        "solve_time": float(solve_time),
-        "material_refill_events": material_refill_events,
-    }
+    return {"sequence_map": seq_map, "makespan": float(makespan), "solve_time": float(solve_time)}
 
 
 
@@ -599,18 +621,12 @@ amr_load:  Dict[int, float] = {i: 0.0 for i in range(1, AMR_COUNT+1)}
 # File tail progress
 _lines_consumed = 0
 current_makespan = 0.0  # Store the latest makespan
-current_solve_time = 0.0  # Store the latest Gurobi solve time (seconds)
-total_solve_time = 0.0  # Cumulative Gurobi solve time across all events
+total_solve_time = 0.0  # Sum of solver runtimes across processed events (seconds)
 
 # Global resource state across events (time is in the same units as MILP T_*)
 agv_available_time: Dict[int, float] = {m: 0.0 for m in M_SET}
 agv_current_node: Dict[int, int] = {m: int(S_m[m]) for m in M_SET}
 station_available_time: Dict[int, float] = {int(n): 0.0 for n in JSON_STATION_MAPPING.values()}
-
-# AMR material inventory: {amr_id: {"A": count, "B": count, "C": count}}
-amr_material_inventory: Dict[int, Dict[str, int]] = {
-    m: {"A": 0, "B": 0, "C": 0} for m in M_SET
-}
 
 
 def remove_artists(rects, texts):
@@ -898,7 +914,7 @@ def draw_static_panels(ax):
 
 def update_title(ax):
     ax.set_title(
-        f"AMR Scheduler with Gurobi | Makespan: {current_makespan:.1f} | Solve(sum): {current_solve_time:.2f}s | Gantt: Time"
+        f"AMR Scheduler with Gurobi | Makespan: {current_makespan:.1f} | Solve: {total_solve_time:.2f}s"
     )
 
 
@@ -906,7 +922,7 @@ def update_title(ax):
 
 def process_event_line_visual(line: str, ax, out_f):
     """Parse one dispatch event line, show top lane, run MILP, draw assignments, write schedule_outbox."""
-    global waiting, current_makespan, current_solve_time, total_solve_time
+    global waiting, current_makespan, total_solve_time
 
     try:
         data = json.loads(line)
@@ -955,32 +971,19 @@ def process_event_line_visual(line: str, ax, out_f):
         agv_available_time=agv_available_time,
         agv_current_node=agv_current_node,
         station_available_time=station_available_time,
-        material_inventory=amr_material_inventory,
     )
     if res is None:
         return
     
-    # Store makespan and solve time for display
+    # Store makespan for display
     current_makespan = res.get("makespan", 0.0)
     total_solve_time += float(res.get("solve_time", 0.0))
-    current_solve_time = total_solve_time
 
     # Flatten MILP result jobs by pick_time then jid
     all_jobs = []
     for m in M_SET:
         all_jobs.extend(res["sequence_map"].get(m, []))
     all_jobs.sort(key=lambda j: (j.get("pick_time", 0.0), j.get("jid", 0)))
-
-    # Print material refill events
-    material_refills = res.get("material_refill_events", {})
-    for m in M_SET:
-        refills = material_refills.get(m, {})
-        for mat_type, count in refills.items():
-            if count > 0:
-                pickup_node = MAT_TYPE_TO_PICKUP.get(mat_type)
-                print(
-                    f"[MaterialRefill] Event {dispatch_time:.1f}: AMR {m} visits node {pickup_node} to refill {count}x Type {mat_type} material (补充10个)"
-                )
 
     # Validate: detect any station-time overlaps in the solution intervals
     # (arrival at station = del_time, leave station = end_time)
@@ -1085,9 +1088,6 @@ def process_event_line_visual(line: str, ax, out_f):
                    pickup_node=pickup_node, delivery_node=delivery_node, wait_time=wait_time)
 
         # write schedule record (MILP-based dispatching result)
-        material_after = job.get("material_after_consume", 0)
-        refill_required = job.get("material_refill_required", False)
-        refill_node = job.get("refill_pickup_node", None)
         rec = {
             "generated_at": dispatch_time,
             "amr": int(amr),
@@ -1098,10 +1098,6 @@ def process_event_line_visual(line: str, ax, out_f):
             "station": str(station) if station is not None else "?",
             "pickup_node": job.get("pickup_node"),
             "delivery_node": delivery_node,
-            "material_refill_before_job": refill_required,
-            "material_refill_node": refill_node,
-            "material_consumed": jtype,
-            "material_inventory_after": material_after,
         }
         out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         out_f.flush()
