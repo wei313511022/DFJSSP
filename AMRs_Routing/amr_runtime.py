@@ -31,9 +31,7 @@ SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"
 GRID_W, GRID_H = 10, 10
 
 START_POS:  Dict[int, Tuple[int, int]] = {
-    6: (4.0, 1.0),
-    5: (4.0, 4.0),
-    4: (4.0, 7.0),
+    
     3: (2.0, 1.0),
     2: (2.0, 4.0),
     1: (2.0, 7.0),
@@ -41,9 +39,11 @@ START_POS:  Dict[int, Tuple[int, int]] = {
 
 # Production stations (right side).
 STATION_POS: Dict[int, Tuple[int, int]] = {
-    3: (9, 1),
-    2: (9, 4),
-    1: (9, 7),
+    5: (9, 0),
+    4: (9, 2),
+    3: (9, 4),
+    2: (9, 6),
+    1: (9, 8),
 }
 
 # Material stations (left side) by job type
@@ -64,7 +64,7 @@ ALL_STATIONS: Set[Tuple[int, int]] = {
 
 # Optional: static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (6, 0),(6, 1),(6, 2),(6, 4),(6, 5),(6, 6),(6, 8),(6, 9),
+    (6, 0),(6, 1),(6, 4),(6, 5),(6, 8),(6, 9),
     
 }
 
@@ -77,7 +77,7 @@ UPDATE_INTERVAL_MS = 200         # timer tick in ms
 SIM_SPEED_MULT     = 1.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
-AMR_COUNT = 6                    # number of AMRs
+AMR_COUNT = 3                    # number of AMRs
 
 # Each AMR can carry up to this many units of each material type
 MATERIAL_CAPACITY = 1
@@ -197,8 +197,8 @@ def astar_8dir(start: Coord,
     STEPS = [
         (1, 0, 1.0), (-1, 0, 1.0),
         (0, 1, 1.0), (0, -1, 1.0),
-        (1, 1, math.sqrt(2)),  (-1, 1, math.sqrt(2)),
-        (1, -1, math.sqrt(2)), (-1, -1, math.sqrt(2)),
+        # (1, 1, math.sqrt(2)),  (-1, 1, math.sqrt(2)),
+        # (1, -1, math.sqrt(2)), (-1, -1, math.sqrt(2)),
     ]
 
     def can_move(x: int, y: int, dx: int, dy: int) -> bool:

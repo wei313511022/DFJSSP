@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # usage: python3 Random_Job_Generator.py --batches 10 --size 15
+# batch: number of lines (batches) to generate
+# size: number of jobs inside each batch
 import json
 import random
 import time
@@ -7,8 +9,7 @@ import argparse
 import math
 
 # --------------------------- Config ---------------------------
-OUTPUT_FILE = "dispatch_inbox.jsonl"
-STATION_COUNT = 3
+STATION_COUNT = 5
 
 # Job definitions
 JOB_TYPES = {
@@ -25,7 +26,7 @@ def generate_data(num_batches, batch_size):
     Generates N batches of jobs instantly and writes to JSONL.
     Each batch contains 'batch_size' jobs.
     """
-    
+    OUTPUT_FILE = f"dispatch_inbox_{batch_size}.jsonl"
     # Clear the file first
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         pass

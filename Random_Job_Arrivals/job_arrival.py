@@ -54,7 +54,7 @@ TOP_LANE_H     = 0.75
 
 # We still keep station_count for station assignment logic (JSONL),
 # but we won't draw the bottom lanes.
-STATION_COUNT  = 3
+STATION_COUNT  = 5
 
 # Dispatch timings
 DISPATCH_PERIOD_S = 10.0

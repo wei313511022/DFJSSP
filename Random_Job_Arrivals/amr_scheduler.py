@@ -3,7 +3,7 @@
 # - Tails 'dispatch_inbox.jsonl' (one JSON per line from Program 1).
 # - Ingests batches into the top Dispatching Queue (waiting area).
 # - Keeps scheduling while queue not empty:
-#     FIFO jobs → earliest-available AMR (ties → lower index).
+#   FIFO jobs -> earliest-available AMR (ties -> lower index).
 # - Renders like Program 1: fixed viewport, left label band; blocks overflow right.
 
 import os, json, math, time, random
@@ -12,8 +12,8 @@ from typing import List, Dict, Optional
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
-# --- in amr_scheduler_live.py (Program 2) ---
-import json, time
+
+# Output file for Program 3
 SCHEDULE_OUTBOX = "schedule_outbox.jsonl"
 
 def emit_assignment(amr_id, job):
@@ -24,8 +24,6 @@ def emit_assignment(amr_id, job):
         "jid": int(job.jid),
         "type": str(job.jtype),
         "proc_time": float(job.proc_time),
-        # optional: a station if you want to keep the same station mapping as Program 1
-        # otherwise Program 3 will map job types to stations deterministically
         "station": str(job.station),
     }
     with open(SCHEDULE_OUTBOX, "a", encoding="utf-8") as f:
@@ -33,27 +31,37 @@ def emit_assignment(amr_id, job):
 
 
 # ------------ Config ------------
-INBOX_PATH         = "dispatch_inbox.jsonl"  # Program 1 appends a JSON line per dispatch
+INBOX_PATH         = "dispatch_inbox.jsonl"
 AMR_COUNT          = 3
 UPDATE_INTERVAL_MS = 250
 
+# --- MODIFICATION: Isolate Job Types & Colors ---
+# Edit this list to change the number of job types (e.g., 5 types)
+JOB_TYPES = ["A", "B", "C"]
+
 LEFT_LABEL_PAD = 5.5
-VIEW_WIDTH     = 40.0  # fixed viewport width (no panning)
+VIEW_WIDTH     = 40.0 
 
 AX_Y_MIN, AX_Y_MAX = 0.0, 2.0
-TOP_Y_CENTER  = 1.25              # Dispatching Queue (waiting jobs)
+TOP_Y_CENTER  = 1.25              
 TOP_LANE_H    = 0.5
 
-BOTTOM_MIN    = 0.0               # AMR zone (bottom half), split into lanes
+BOTTOM_MIN    = 0.0               
 BOTTOM_HEIGHT = (AX_Y_MAX - AX_Y_MIN) / 2.0
 AMR_Y_CENTERS = [BOTTOM_MIN + (i + 0.5) * (BOTTOM_HEIGHT / AMR_COUNT)
                  for i in range(AMR_COUNT)]
 AMR_LANE_H    = BOTTOM_HEIGHT / AMR_COUNT * 0.7
 
-# Use MPL default color cycle for job types (A/B/C), consistent with Program 1
+# Dynamic color generation based on JOB_TYPES
 _cycle = plt.rcParams.get("axes.prop_cycle", None)
-_cycle_list = _cycle.by_key()["color"] if _cycle else ["C0", "C1", "C2", "C3"]
-TYPE_COLORS = {"A": _cycle_list[0], "B": _cycle_list[1], "C": _cycle_list[2]}
+# Ensure we have enough colors; if not, use a default list
+_cycle_list = _cycle.by_key()["color"] if _cycle else ["C0", "C1", "C2", "C3", "C4", "C5", "C6"]
+
+# Map each job type to a color (cycling if types > colors)
+TYPE_COLORS = {
+    jtype: _cycle_list[i % len(_cycle_list)]
+    for i, jtype in enumerate(JOB_TYPES)
+}
 
 # ------------ Data models ------------
 @dataclass
@@ -66,13 +74,13 @@ class Job:
 # ------------ Scheduler state ------------
 waiting: List[Job] = []         # FIFO waiting (top lane)
 rects_top: List[Rectangle] = [] # top lane artists
-texts_top: List                = []
+texts_top: List            = []
 
 # Per-AMR assigned jobs (visual + cursors)
-amr_cursor: Dict[int, float] = {i: LEFT_LABEL_PAD for i in range(1, AMR_COUNT+1)}  # cumulative width per AMR lane
+amr_cursor: Dict[int, float] = {i: LEFT_LABEL_PAD for i in range(1, AMR_COUNT+1)}
 amr_rects: Dict[int, List[Rectangle]] = {i: [] for i in range(1, AMR_COUNT+1)}
-amr_texts: Dict[int, List]           = {i: [] for i in range(1, AMR_COUNT+1)}
-amr_load:  Dict[int, float] = {i: 0.0 for i in range(1, AMR_COUNT+1)}  # "availability" in duration units
+amr_texts: Dict[int, List]            = {i: [] for i in range(1, AMR_COUNT+1)}
+amr_load:  Dict[int, float] = {i: 0.0 for i in range(1, AMR_COUNT+1)}
 
 # Tail progress
 _lines_consumed = 0
@@ -95,7 +103,7 @@ def rebuild_top_lane(ax):
         r = Rectangle((x, 1.25),
                       j.proc_time/2.0, TOP_LANE_H,
                       linewidth=1.2, edgecolor="black",
-                      facecolor=TYPE_COLORS.get(j.jtype, "C3"),
+                      facecolor=TYPE_COLORS.get(j.jtype, "gray"),
                       clip_on=True)
         ax.add_patch(r); rects_top.append(r)
         t = ax.text(x + j.proc_time/4.0, 1.5,
@@ -113,7 +121,7 @@ def draw_on_amr(ax, amr_id: int, j: Job):
     r = Rectangle((x, y - AMR_LANE_H/2.0),
                   j.proc_time/4.0, AMR_LANE_H,
                   linewidth=1.2, edgecolor="black",
-                  facecolor=TYPE_COLORS.get(j.jtype, "C3"),
+                  facecolor=TYPE_COLORS.get(j.jtype, "gray"),
                   clip_on=True)
     ax.add_patch(r); amr_rects[amr_id].append(r)
     t = ax.text(x + j.proc_time/8.0, y,
@@ -122,15 +130,17 @@ def draw_on_amr(ax, amr_id: int, j: Job):
                 fontsize=9, weight="bold",
                 clip_on=True)
     amr_texts[amr_id].append(t)
-    amr_cursor[amr_id] += j.proc_time/4.0  # lane grows to the right
+    amr_cursor[amr_id] += j.proc_time/4.0 
 
 def fifo_dispatch(ax):
     """While we have waiting jobs, pop FIFO and assign to earliest-available AMR."""
     global waiting
     changed = False
     while waiting:
-        amr = min(amr_load, key=lambda k: (amr_load[k], k))  # earliest available; tie → lower id
+        # Earliest available; tie -> lower id
+        amr = min(amr_load, key=lambda k: (amr_load[k], k)) 
         j = waiting.pop(0)
+        
         draw_on_amr(ax, amr, j)
         amr_load[amr] += j.proc_time
         emit_assignment(amr, j) 
@@ -160,7 +170,8 @@ def ingest_new_batches(ax):
             for j in data.get("jobs", []):
                 waiting.append(Job(
                     jid=int(j["jid"]),
-                    jtype=str(j.get("type", "A")),
+                    # Use the first configured type as fallback if "type" missing
+                    jtype=str(j.get("type", JOB_TYPES[0])), 
                     proc_time=float(j["proc_time"]),
                     station=str(j["station"]),
                 ))
@@ -172,7 +183,7 @@ def ingest_new_batches(ax):
     return added > 0
 
 def draw_static_panels(ax):
-    band_frac = 0.12  # widen so labels fit
+    band_frac = 0.12 
     # Top panel (Dispatching Queue)
     top_panel = Rectangle((0.0, 0.5), band_frac, 0.5,
                           transform=ax.transAxes, fill=False,
@@ -189,15 +200,10 @@ def draw_static_panels(ax):
                           transform=ax.transAxes, fill=False,
                           linewidth=1.8, clip_on=False, zorder=3)
     ax.add_patch(bot_panel)
-    # bp = ax.text(band_frac*0.5, 0.25, "AMRs",
-    #              transform=ax.transAxes, ha="center", va="center",
-    #              fontsize=0, weight="bold", color="gray",
-    #              clip_on=True, zorder=4)
-    # bp.set_clip_path(bot_panel)
 
     # Lane labels inside bottom panel
     for i in range(AMR_COUNT):
-        y_frac = (i + 0.5) / AMR_COUNT * 0.5  # bottom half
+        y_frac = (i + 0.5) / AMR_COUNT * 0.5 
         txt = ax.text(band_frac*0.5, y_frac, f"AMR {i+1}",
                       transform=ax.transAxes,
                       ha="center", va="center",
@@ -205,23 +211,20 @@ def draw_static_panels(ax):
                       clip_on=True, zorder=4)
         txt.set_clip_path(bot_panel)
 
-    # Legend for types
+    # Legend for types (Dynamically generated from TYPE_COLORS)
     handles = [Patch(facecolor=TYPE_COLORS[k], edgecolor="black", label=f"Type {k}") for k in TYPE_COLORS]
     ax.legend(handles=handles, loc="upper right", frameon=True)
 
 def update_title(ax):
-    total_wait = sum(j.proc_time for j in waiting)
-    loads = ", ".join(f"{k}:{amr_load[k]:.0f}" for k in sorted(amr_load))
-    # ax.set_title(
-    #     f"AMR FIFO Scheduler — waiting={len(waiting)} (sum {total_wait:.0f}) | loads [{loads}] "
-    #     f"(tailing {os.path.abspath(INBOX_PATH)})\n"
-    #     f"(Program 1 appends JSON per dispatch; this keeps dispatching till empty)"
-    # )
+    # Optional title update (commented out in original, kept consistent)
+    # total_wait = sum(j.proc_time for j in waiting)
+    # loads = ", ".join(f"{k}:{amr_load[k]:.0f}" for k in sorted(amr_load))
+    pass
 
 def main():
     fig, ax = plt.subplots(figsize=(13, 4.8))
     ax.set_ylim(AX_Y_MIN, AX_Y_MAX)
-    ax.set_xlim(0.0, VIEW_WIDTH)      # fixed viewport, same look as Program 1
+    ax.set_xlim(0.0, VIEW_WIDTH)
     ax.set_yticks([]); ax.set_xticks([])
     for side in ('top','right','bottom','left'):
         ax.spines[side].set_visible(True)
