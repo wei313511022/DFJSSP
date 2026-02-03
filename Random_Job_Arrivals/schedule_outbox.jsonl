@@ -1,25 +1,50 @@
-{"generated_at": 9.247950476588723, "amr": 1, "jid": 4, "type": "C", "proc_time": 20.0, "transport_time": 11.0, "station": "5", "pickup_node": 1, "delivery_node": 91}
-{"generated_at": 9.247950476588723, "amr": 2, "jid": 3, "type": "B", "proc_time": 15.0, "transport_time": 12.0, "station": "2", "pickup_node": 4, "delivery_node": 97}
-{"generated_at": 9.247950476588723, "amr": 3, "jid": 0, "type": "A", "proc_time": 10.0, "transport_time": 11.0, "station": "1", "pickup_node": 7, "delivery_node": 99}
-{"generated_at": 9.247950476588723, "amr": 3, "jid": 2, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "2", "pickup_node": 99, "delivery_node": 97}
-{"generated_at": 9.247950476588723, "amr": 1, "jid": 1, "type": "C", "proc_time": 20.0, "transport_time": 4.0, "station": "3", "pickup_node": 91, "delivery_node": 95}
-{"generated_at": 18.112424637461128, "amr": 2, "jid": 9, "type": "C", "proc_time": 20.0, "transport_time": 11.0, "station": "5", "pickup_node": 1, "delivery_node": 91}
-{"generated_at": 18.112424637461128, "amr": 3, "jid": 7, "type": "B", "proc_time": 15.0, "transport_time": 10.0, "station": "3", "pickup_node": 4, "delivery_node": 95}
-{"generated_at": 18.112424637461128, "amr": 2, "jid": 8, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91}
-{"generated_at": 18.112424637461128, "amr": 1, "jid": 6, "type": "A", "proc_time": 10.0, "transport_time": 15.0, "station": "5", "pickup_node": 7, "delivery_node": 91}
-{"generated_at": 18.112424637461128, "amr": 2, "jid": 5, "type": "C", "proc_time": 20.0, "transport_time": 8.0, "station": "1", "pickup_node": 91, "delivery_node": 99}
-{"generated_at": 34.19250525705854, "amr": 3, "jid": 12, "type": "C", "proc_time": 20.0, "transport_time": 11.0, "station": "5", "pickup_node": 1, "delivery_node": 91}
-{"generated_at": 34.19250525705854, "amr": 1, "jid": 11, "type": "C", "proc_time": 20.0, "transport_time": 13.0, "station": "3", "pickup_node": 1, "delivery_node": 95}
-{"generated_at": 34.19250525705854, "amr": 3, "jid": 10, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91}
-{"generated_at": 34.19250525705854, "amr": 2, "jid": 13, "type": "B", "proc_time": 15.0, "transport_time": 14.0, "station": "1", "pickup_node": 4, "delivery_node": 99}
-{"generated_at": 34.19250525705854, "amr": 3, "jid": 14, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91}
-{"generated_at": 42.403914424353665, "amr": 1, "jid": 19, "type": "A", "proc_time": 10.0, "transport_time": 11.0, "station": "1", "pickup_node": 7, "delivery_node": 99}
-{"generated_at": 42.403914424353665, "amr": 3, "jid": 17, "type": "C", "proc_time": 20.0, "transport_time": 11.0, "station": "5", "pickup_node": 1, "delivery_node": 91}
-{"generated_at": 42.403914424353665, "amr": 2, "jid": 16, "type": "B", "proc_time": 15.0, "transport_time": 10.0, "station": "3", "pickup_node": 4, "delivery_node": 95}
-{"generated_at": 42.403914424353665, "amr": 1, "jid": 18, "type": "A", "proc_time": 10.0, "transport_time": 6.0, "station": "4", "pickup_node": 99, "delivery_node": 93}
-{"generated_at": 42.403914424353665, "amr": 1, "jid": 15, "type": "A", "proc_time": 10.0, "transport_time": 0.0, "station": "4", "pickup_node": 93, "delivery_node": 93}
-{"generated_at": 50.26095917212759, "amr": 2, "jid": 22, "type": "B", "proc_time": 15.0, "transport_time": 14.0, "station": "1", "pickup_node": 4, "delivery_node": 99}
-{"generated_at": 50.26095917212759, "amr": 3, "jid": 24, "type": "C", "proc_time": 20.0, "transport_time": 11.0, "station": "5", "pickup_node": 1, "delivery_node": 91}
-{"generated_at": 50.26095917212759, "amr": 1, "jid": 23, "type": "A", "proc_time": 10.0, "transport_time": 13.0, "station": "3", "pickup_node": 7, "delivery_node": 95}
-{"generated_at": 50.26095917212759, "amr": 3, "jid": 21, "type": "C", "proc_time": 20.0, "transport_time": 4.0, "station": "3", "pickup_node": 91, "delivery_node": 95}
-{"generated_at": 50.26095917212759, "amr": 3, "jid": 20, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "3", "pickup_node": 95, "delivery_node": 95}
+{"generated_at": 17.67932516798017, "amr": 2, "jid": 0, "type": "B", "proc_time": 15.0, "transport_time": 11.0, "station": "3", "pickup_node": 5, "delivery_node": 95, "refill": true, "q_after": 2}
+{"generated_at": 17.67932516798017, "amr": 3, "jid": 1, "type": "A", "proc_time": 10.0, "transport_time": 10.0, "station": "1", "pickup_node": 8, "delivery_node": 99, "refill": true, "q_after": 2}
+{"generated_at": 17.67932516798017, "amr": 1, "jid": 3, "type": "C", "proc_time": 20.0, "transport_time": 14.0, "station": "2", "pickup_node": 2, "delivery_node": 97, "refill": true, "q_after": 2}
+{"generated_at": 17.67932516798017, "amr": 3, "jid": 2, "type": "A", "proc_time": 10.0, "transport_time": 6.0, "station": "4", "pickup_node": 99, "delivery_node": 93, "refill": false, "q_after": 1}
+{"generated_at": 17.67932516798017, "amr": 3, "jid": 4, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "5", "pickup_node": 93, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 23.390132717807905, "amr": 1, "jid": 7, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "2", "pickup_node": 97, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 23.390132717807905, "amr": 2, "jid": 5, "type": "A", "proc_time": 10.0, "transport_time": 14.0, "station": "4", "pickup_node": 8, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 23.390132717807905, "amr": 1, "jid": 9, "type": "C", "proc_time": 20.0, "transport_time": 2.0, "station": "3", "pickup_node": 97, "delivery_node": 95, "refill": false, "q_after": 0}
+{"generated_at": 23.390132717807905, "amr": 2, "jid": 6, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "5", "pickup_node": 93, "delivery_node": 91, "refill": false, "q_after": 1}
+{"generated_at": 23.390132717807905, "amr": 3, "jid": 8, "type": "A", "proc_time": 10.0, "transport_time": 10.0, "station": "2", "pickup_node": 8, "delivery_node": 97, "refill": true, "q_after": 2}
+{"generated_at": 31.115662654134454, "amr": 2, "jid": 12, "type": "B", "proc_time": 15.0, "transport_time": 6.0, "station": "2", "pickup_node": 91, "delivery_node": 97, "refill": false, "q_after": 0}
+{"generated_at": 31.115662654134454, "amr": 3, "jid": 14, "type": "A", "proc_time": 10.0, "transport_time": 0.0, "station": "2", "pickup_node": 97, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 31.115662654134454, "amr": 1, "jid": 13, "type": "C", "proc_time": 20.0, "transport_time": 14.0, "station": "2", "pickup_node": 2, "delivery_node": 97, "refill": true, "q_after": 2}
+{"generated_at": 31.115662654134454, "amr": 3, "jid": 10, "type": "A", "proc_time": 10.0, "transport_time": 6.0, "station": "5", "pickup_node": 97, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 31.115662654134454, "amr": 1, "jid": 11, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "2", "pickup_node": 97, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 40.342355131058184, "amr": 2, "jid": 18, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "1", "pickup_node": 97, "delivery_node": 99, "refill": false, "q_after": 1}
+{"generated_at": 40.342355131058184, "amr": 2, "jid": 17, "type": "A", "proc_time": 10.0, "transport_time": 0.0, "station": "1", "pickup_node": 99, "delivery_node": 99, "refill": false, "q_after": 0}
+{"generated_at": 40.342355131058184, "amr": 3, "jid": 16, "type": "A", "proc_time": 10.0, "transport_time": 14.0, "station": "4", "pickup_node": 8, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 40.342355131058184, "amr": 2, "jid": 15, "type": "B", "proc_time": 15.0, "transport_time": 11.0, "station": "3", "pickup_node": 5, "delivery_node": 95, "refill": true, "q_after": 2}
+{"generated_at": 40.342355131058184, "amr": 3, "jid": 19, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "5", "pickup_node": 93, "delivery_node": 91, "refill": false, "q_after": 1}
+{"generated_at": 52.044861269881636, "amr": 1, "jid": 21, "type": "A", "proc_time": 10.0, "transport_time": 10.0, "station": "2", "pickup_node": 8, "delivery_node": 97, "refill": true, "q_after": 2}
+{"generated_at": 52.044861269881636, "amr": 3, "jid": 23, "type": "A", "proc_time": 10.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 52.044861269881636, "amr": 2, "jid": 24, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "2", "pickup_node": 95, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 52.044861269881636, "amr": 1, "jid": 22, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "3", "pickup_node": 97, "delivery_node": 95, "refill": false, "q_after": 1}
+{"generated_at": 52.044861269881636, "amr": 1, "jid": 20, "type": "A", "proc_time": 10.0, "transport_time": 4.0, "station": "5", "pickup_node": 95, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 64.02674145009512, "amr": 3, "jid": 27, "type": "C", "proc_time": 20.0, "transport_time": 12.0, "station": "4", "pickup_node": 2, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 64.02674145009512, "amr": 2, "jid": 25, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "1", "pickup_node": 97, "delivery_node": 99, "refill": false, "q_after": 0}
+{"generated_at": 64.02674145009512, "amr": 1, "jid": 28, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 64.02674145009512, "amr": 3, "jid": 29, "type": "C", "proc_time": 20.0, "transport_time": 4.0, "station": "2", "pickup_node": 93, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 64.02674145009512, "amr": 2, "jid": 26, "type": "B", "proc_time": 15.0, "transport_time": 11.0, "station": "4", "pickup_node": 5, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 79.8996676278948, "amr": 1, "jid": 34, "type": "C", "proc_time": 20.0, "transport_time": 16.0, "station": "1", "pickup_node": 2, "delivery_node": 99, "refill": true, "q_after": 2}
+{"generated_at": 79.8996676278948, "amr": 3, "jid": 33, "type": "C", "proc_time": 20.0, "transport_time": 2.0, "station": "1", "pickup_node": 97, "delivery_node": 99, "refill": false, "q_after": 0}
+{"generated_at": 79.8996676278948, "amr": 2, "jid": 30, "type": "B", "proc_time": 15.0, "transport_time": 4.0, "station": "2", "pickup_node": 93, "delivery_node": 97, "refill": false, "q_after": 1}
+{"generated_at": 79.8996676278948, "amr": 3, "jid": 31, "type": "A", "proc_time": 10.0, "transport_time": 14.0, "station": "4", "pickup_node": 8, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 79.8996676278948, "amr": 2, "jid": 32, "type": "A", "proc_time": 10.0, "transport_time": 10.0, "station": "1", "pickup_node": 8, "delivery_node": 99, "refill": true, "q_after": 2}
+{"generated_at": 87.74486728529837, "amr": 1, "jid": 39, "type": "B", "proc_time": 15.0, "transport_time": 13.0, "station": "1", "pickup_node": 5, "delivery_node": 99, "refill": true, "q_after": 2}
+{"generated_at": 87.74486728529837, "amr": 2, "jid": 38, "type": "B", "proc_time": 15.0, "transport_time": 4.0, "station": "3", "pickup_node": 99, "delivery_node": 95, "refill": false, "q_after": 0}
+{"generated_at": 87.74486728529837, "amr": 3, "jid": 35, "type": "B", "proc_time": 15.0, "transport_time": 11.0, "station": "4", "pickup_node": 5, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 87.74486728529837, "amr": 2, "jid": 37, "type": "A", "proc_time": 10.0, "transport_time": 4.0, "station": "5", "pickup_node": 95, "delivery_node": 91, "refill": false, "q_after": 1}
+{"generated_at": 87.74486728529837, "amr": 1, "jid": 36, "type": "C", "proc_time": 20.0, "transport_time": 0.0, "station": "1", "pickup_node": 99, "delivery_node": 99, "refill": false, "q_after": 1}
+{"generated_at": 115.99587696933982, "amr": 2, "jid": 44, "type": "A", "proc_time": 10.0, "transport_time": 0.0, "station": "5", "pickup_node": 91, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 115.99587696933982, "amr": 3, "jid": 42, "type": "B", "proc_time": 15.0, "transport_time": 0.0, "station": "4", "pickup_node": 93, "delivery_node": 93, "refill": false, "q_after": 1}
+{"generated_at": 115.99587696933982, "amr": 3, "jid": 40, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "3", "pickup_node": 93, "delivery_node": 95, "refill": false, "q_after": 1}
+{"generated_at": 115.99587696933982, "amr": 1, "jid": 41, "type": "A", "proc_time": 10.0, "transport_time": 10.0, "station": "1", "pickup_node": 8, "delivery_node": 99, "refill": true, "q_after": 2}
+{"generated_at": 115.99587696933982, "amr": 3, "jid": 43, "type": "A", "proc_time": 10.0, "transport_time": 2.0, "station": "2", "pickup_node": 95, "delivery_node": 97, "refill": false, "q_after": 0}
+{"generated_at": 120.63187381817075, "amr": 2, "jid": 48, "type": "B", "proc_time": 15.0, "transport_time": 11.0, "station": "4", "pickup_node": 5, "delivery_node": 93, "refill": true, "q_after": 2}
+{"generated_at": 120.63187381817075, "amr": 3, "jid": 46, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "1", "pickup_node": 97, "delivery_node": 99, "refill": false, "q_after": 0}
+{"generated_at": 120.63187381817075, "amr": 1, "jid": 47, "type": "C", "proc_time": 20.0, "transport_time": 8.0, "station": "5", "pickup_node": 99, "delivery_node": 91, "refill": false, "q_after": 0}
+{"generated_at": 120.63187381817075, "amr": 2, "jid": 49, "type": "B", "proc_time": 15.0, "transport_time": 0.0, "station": "4", "pickup_node": 93, "delivery_node": 93, "refill": false, "q_after": 1}
+{"generated_at": 120.63187381817075, "amr": 2, "jid": 45, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "3", "pickup_node": 93, "delivery_node": 95, "refill": false, "q_after": 0}
