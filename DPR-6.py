@@ -31,7 +31,7 @@ P_NODES = set(TYPE_TO_MATERIAL_NODE.values())
 JSON_STATION_MAPPING = {5: 91, 4: 93, 3: 95, 2: 97, 1: 99}  # delivery nodes
 
 M_SET = range(1, 4)  # 3 AMRs
-S_m = {1: 2, 2: 5, 3: 8}  # AMR start nodes
+S_m = {1: 8, 2: 5, 3: 2}  # AMR start nodes
 
 # Barrier nodes (AMRs cannot traverse these grid nodes)
 BARRIER_NODES = {61, 62, 63, 65, 66, 67, 69, 70}

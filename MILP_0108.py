@@ -21,7 +21,7 @@ MATERIAL_PICK_QTY = 3  # each pickup replenishes 3 units of the same material
 P_NODES = set(TYPE_TO_MATERIAL_NODE.values())  # material pickup nodes
 JSON_STATION_MAPPING = {5: 91, 4: 93, 3: 95, 2: 97, 1: 99}  # delivery nodes
 M_SET = range(1, 4)   # 3 AGVs
-S_m = {1: 2, 2: 5, 3: 8}  # AGV start nodes 
+S_m = {1: 8, 2: 5, 3: 2}  # AGV start nodes 
 
 # Barrier nodes (AGVs cannot traverse these grid nodes)
 BARRIER_NODES = {61, 62, 63, 65, 66, 67, 69, 70}
@@ -104,7 +104,7 @@ def solve_vrp_from_jobs(
     agv_available_time=None,
     agv_current_node=None,
     station_available_time=None,
-    agv_inventory=None,
+    agv_inventory=None, 
     time_limit=TIME_LIMIT,
 ):
     if not jobs:
@@ -118,7 +118,7 @@ def solve_vrp_from_jobs(
     if station_available_time is None:
         station_available_time = {int(n): 0.0 for n in JSON_STATION_MAPPING.values()}
 
-    # Global inventory state across events (optional; multi-material like DPR-1):
+    # Global inventory state across events:
     # - Each AMR can carry multiple material types concurrently.
     # - For each type, onboard inventory is capped at MATERIAL_PICK_QTY.
     # - Replenish that type to MATERIAL_PICK_QTY only when its onboard qty is 0.
@@ -160,11 +160,11 @@ def solve_vrp_from_jobs(
     E_sum = sum(TASK_DATA[i]["E_l"] for i in L_SET)
     M_local = max(1.0, float(S_max + n_tasks * D_max + E_sum + 5.0))
 
-    model = gp.Model("Reschedule_event")
+    model = gp.Model("MILP_Scheduler")
     if time_limit is not None:
         model.Params.TimeLimit = float(time_limit)
     model.Params.MIPGap = 0.0
-    model.Params.OutputFlag = 1
+    model.Params.OutputFlag = 0
     # Helpful when you care about proving optimality (may take longer to find first feasible).
     try:
         model.Params.MIPFocus = 2
@@ -176,7 +176,7 @@ def solve_vrp_from_jobs(
     Y = model.addVars(L_SET, M_SET, vtype=GRB.BINARY, name="Y")
     W = model.addVars(L_PRIME, L_PRIME, M_SET, vtype=GRB.BINARY, name="W")
 
-    # Material replenishment & inventory (multi-material; matches DPR-1)
+    # Material replenishment & inventory
     # - Each job consumes 1 unit of its type.
     # - For each type, onboard qty is in [0, MATERIAL_PICK_QTY-1] after completing a job.
     # - If the job's type qty is 0 before service, AMR must visit that type's pickup and replenish to MATERIAL_PICK_QTY.
@@ -290,6 +290,7 @@ def solve_vrp_from_jobs(
     model.addConstrs((W[0, 0, m] == 0 for m in M_SET), name="no_start_self")
     model.addConstrs((W[0, VIRTUAL_END, m] == 0 for m in M_SET), name="no_empty_arc")
     model.addConstrs((W[VIRTUAL_END, VIRTUAL_END, m] == 0 for m in M_SET), name="no_end_self")
+
     model.addConstrs(
         (T_End[l] == T_Del[l] + TASK_DATA[l]["E_l"] for l in L_SET),
         name="exec",
@@ -326,6 +327,7 @@ def solve_vrp_from_jobs(
             # Other types unchanged from start inventory
             for t in TYPES:
                 q0 = int(start_qty[int(m)].get(t, 0))
+                #Keep
                 if t != t_l:
                     model.addConstr(
                         Q_after[l, t] >= q0 - M_inv * (1 - W[0, l, m]),
@@ -402,19 +404,11 @@ def solve_vrp_from_jobs(
 
                         # No-refill transition: if W=1 and R=0 -> Q_after[l,t_l] = Q_after[lp,t_l] - 1
                         model.addConstr(
-                            Q_after[l, t_l]
-                            >= Q_after[lp, t_l]
-                            - 1
-                            - M_inv * (1 - W[lp, l, m])
-                            - M_inv * R_refill[l],
+                            Q_after[l, t_l] >= Q_after[lp, t_l] - 1 - M_inv * (1 - W[lp, l, m]) - M_inv * R_refill[l],
                             name=f"inv_consume_lb_{lp}_{l}_{m}",
                         )
                         model.addConstr(
-                            Q_after[l, t_l]
-                            <= Q_after[lp, t_l]
-                            - 1
-                            + M_inv * (1 - W[lp, l, m])
-                            + M_inv * R_refill[l],
+                            Q_after[l, t_l] <= Q_after[lp, t_l] - 1 + M_inv * (1 - W[lp, l, m]) + M_inv * R_refill[l],
                             name=f"inv_consume_ub_{lp}_{l}_{m}",
                         )
     
