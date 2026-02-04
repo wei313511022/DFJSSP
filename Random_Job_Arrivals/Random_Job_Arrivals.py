@@ -3,8 +3,8 @@ import random
 import math
 
 # --- Configuration ---
-NUM_EPISODES = 10000         # Total training episodes
-EPISODE_DURATION = 1000.0    # Duration of one episode (sim-seconds)
+NUM_EPISODES = 1000         # Total training episodes
+EPISODE_DURATION = 100.0    # Duration of one episode (sim-seconds)
 MEAN_ARRIVAL_TIME = 3.0     # Average seconds between jobs (Poisson Lambda)
 OUTPUT_FILE = "training_dataset.json"
 
@@ -53,22 +53,19 @@ def generate_episode(episode_id):
 
 def main():
     print(f"Generating {NUM_EPISODES} episodes...")
-    dataset = []
     
-    total_jobs = 0
-    for i in range(NUM_EPISODES):
-        scenario = generate_episode(i)
-        dataset.append(scenario)
-        total_jobs += len(scenario['jobs'])
-        
-        if (i+1) % 100 == 0:
-            print(f"Generated {i+1} episodes...")
+    # Use 'w' to overwrite/create the file
+    with open("training_dataset.jsonl", "w") as f: 
+        for i in range(NUM_EPISODES):
+            scenario = generate_episode(i)
+            
+            # Write one line at a time
+            f.write(json.dumps(scenario) + "\n")
+            
+            if (i+1) % 100 == 0:
+                print(f"Generated {i+1} episodes...")
 
-    with open(OUTPUT_FILE, "w") as f:
-        json.dump(dataset, f, indent=None) # Compact JSON (no indentation) to save space
-
-    print(f"\nSaved to {OUTPUT_FILE}")
-    print(f"Avg Jobs/Episode: {total_jobs / NUM_EPISODES:.1f}")
+    print(f"\nSaved to training_dataset.jsonl")
 
 if __name__ == "__main__":
     main()
