@@ -347,9 +347,9 @@ def _schedule_one_operation(
 	# No precedence among operations inside a job.
 	op_ready_time = float(js.release_time)
 
-	# Inventory is tracked per type; each type max 3; refill only when that type is 0.
+	# Inventory is tracked per type; each type max 3; refill when qty <= 1.
 	onboard_qty = int(amr.inv.get(t, 0))
-	needs_refill = onboard_qty <= 0
+	needs_refill = onboard_qty <= 1
 	if needs_refill:
 		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
 		to_pick_travel = float(calculate_distance(prev_node, pickup_node))
