@@ -1,0 +1,11 @@
+{"generated_at": 1763273536.8367307, "amr": 1, "jid": 0, "type": "B", "proc_time": 15.0, "station": "3"}
+{"generated_at": 1763273536.839648, "amr": 2, "jid": 1, "type": "B", "proc_time": 15.0, "station": "1"}
+{"generated_at": 1763273536.8409526, "amr": 3, "jid": 2, "type": "C", "proc_time": 20.0, "station": "2"}
+{"generated_at": 1763273536.8418567, "amr": 1, "jid": 3, "type": "A", "proc_time": 10.0, "station": "3"}
+{"generated_at": 1763273536.8427365, "amr": 2, "jid": 4, "type": "A", "proc_time": 10.0, "station": "2"}
+{"generated_at": 1763273536.8437285, "amr": 3, "jid": 5, "type": "A", "proc_time": 10.0, "station": "2"}
+{"generated_at": 1763273542.3365262, "amr": 1, "jid": 6, "type": "B", "proc_time": 15.0, "station": "3"}
+{"generated_at": 1763273542.337566, "amr": 2, "jid": 7, "type": "B", "proc_time": 15.0, "station": "3"}
+{"generated_at": 1763273542.3387868, "amr": 3, "jid": 8, "type": "A", "proc_time": 10.0, "station": "1"}
+{"generated_at": 1763273542.3399642, "amr": 1, "jid": 9, "type": "B", "proc_time": 15.0, "station": "1"}
+{"generated_at": 1763273542.3424356, "amr": 2, "jid": 10, "type": "A", "proc_time": 10.0, "station": "2"}
