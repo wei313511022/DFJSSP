@@ -11,6 +11,8 @@ from gurobipy import GRB
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
 
+from calcu_dist import make_calculate_distance
+
 # ===================== MILP CONFIG / LOGIC (from MILP.py) =====================
 
 TIME_LIMIT = 3600
@@ -30,10 +32,7 @@ INBOX = "dispatch_inbox.jsonl"
 SCHEDULE_OUTBOX = "Random_Job_Arrivals/schedule_outbox.jsonl"
 
 
-def calculate_distance(node1, node2, grid_size=GRID_SIZE):
-    r1, c1 = (node1 - 1) // grid_size, (node1 - 1) % grid_size
-    r2, c2 = (node2 - 1) // grid_size, (node2 - 1) % grid_size
-    return abs(r1 - r2) + abs(c1 - c2)
+calculate_distance = make_calculate_distance(GRID_SIZE, ())
 
 
 def solve_vrp_from_jobs(

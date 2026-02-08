@@ -6,8 +6,10 @@ import time
 import argparse
 import math
 
+from config import INBOX
+
 # --------------------------- Config ---------------------------
-OUTPUT_FILE = "dispatch_inbox.jsonl"
+OUTPUT_FILE = INBOX
 STATION_COUNT = 5
 
 # Job definitions
