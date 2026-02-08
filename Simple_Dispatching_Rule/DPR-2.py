@@ -28,9 +28,9 @@ from visualization import (
     UPDATE_INTERVAL_MS
 )
 
-# ===================== FIELD CONFIG =====================
+# ===================== FIELD map =====================
 
-from config import (
+from map import (
     TIME_LIMIT,
     GRID_SIZE,
     TYPE_TO_MATERIAL_NODE,
@@ -387,7 +387,7 @@ def dispatch_a1_event(
     if tasks:
         raise RuntimeError(
             "Dispatch could not schedule all tasks under the current constraints. "
-            "This usually indicates an infeasible type/AMR/inventory configuration."
+            "This usually indicates an infeasible type/AMR/inventory mapuration."
         )
 
     # Push AMR states back to globals (across events)

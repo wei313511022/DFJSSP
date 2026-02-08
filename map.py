@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Set
 
-TIME_LIMIT = 300
+TIME_LIMIT = None
 
 # Grid
 GRID_SIZE: int = 10
@@ -20,7 +20,7 @@ M_SET = range(1, 4)
 S_m: Dict[int, int] = {1: 8, 2: 5, 3: 2}
 
 # Files
-INBOX = "dispatch_inbox.jsonl"
+INBOX = "test_inbox.jsonl"
 SCHEDULE_OUTBOX = "Random_Job_Arrivals/schedule_outbox.jsonl"
 
 

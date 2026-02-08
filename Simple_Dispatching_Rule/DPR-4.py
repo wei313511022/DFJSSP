@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""DPR-6 (max processing time)
+"""DPR-4 (random-op)
 
-- Choose the operation with the largest processing time (ties random).
+- Randomly choose the next feasible operation.
 - Assign AMR by earliest completion time (includes travel, station wait, and proc_time).
+- Other behavior (inventory, visualization, routing) matches DPR-1.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from visualization import (
     UPDATE_INTERVAL_MS
 )
 
-# ===================== FIELD CONFIG =====================
+# ===================== FIELD map =====================
 
-from config import (
+from map import (
 	TIME_LIMIT,
 	GRID_SIZE,
 	TYPE_TO_MATERIAL_NODE,
@@ -48,7 +49,7 @@ from calcu_dist import make_calculate_distance
 calculate_distance = make_calculate_distance(GRID_SIZE, BARRIER_NODES)
 
 
-# ===================== DPR(a6) DISPATCHING LOGIC =====================
+# ===================== DPR(a4) DISPATCHING LOGIC =====================
 
 
 @dataclass
@@ -137,68 +138,18 @@ def _amr_is_material_compatible(amr: AMRState, op: Operation) -> bool:
 	return True
 
 
-def _choose_task_by_max_proc_time(
+def _choose_random_task(
 	tasks: List[TaskState],
 	amrs: Dict[int, AMRState],
 ) -> Optional[TaskState]:
-	"""Pick the operation with the largest processing time among feasible operations.
-	
-	If tie, choose randomly.
-	"""
-	feasible_tasks = []
+	feasible: List[TaskState] = []
 	for tsk in tasks:
 		eligible = _eligible_amrs_for_op(tsk.op)
 		if any(_amr_is_material_compatible(amrs[m], tsk.op) for m in eligible):
-			feasible_tasks.append(tsk)
-	
-	if not feasible_tasks:
+			feasible.append(tsk)
+	if not feasible:
 		return None
-	
-	# Find max processing time
-	max_proc_time = max(float(tsk.op.proc_time) for tsk in feasible_tasks)
-	
-	# Get all tasks with max processing time
-	tied_tasks = [tsk for tsk in feasible_tasks 
-	              if abs(float(tsk.op.proc_time) - max_proc_time) <= 1e-12]
-	
-	# Choose randomly among tied tasks
-	return random.choice(tied_tasks)
-
-
-def _estimate_required_station_wait(
-	tsk: TaskState,
-	amr: AMRState,
-	station_available_time: Dict[int, float],
-) -> float:
-	"""Estimate this task's station-queue wait time if executed next on this AMR.
-
-	Matches the wait_time definition used in _schedule_one_operation:
-	wait_time = station_start - arrive_delivery (clipped at 0).
-	"""
-	op = tsk.op
-	t = str(op.jtype).upper()
-
-	prev_end_time = float(amr.available_time)
-	prev_node = int(amr.current_node)
-	op_ready_time = float(tsk.release_time)
-
-	onboard_qty = int(amr.inv.get(t, 0))
-	needs_refill = onboard_qty <= 0
-	if needs_refill:
-		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
-		to_pick_travel = float(calculate_distance(prev_node, pickup_node))
-		pick_time = prev_end_time + to_pick_travel
-	else:
-		pickup_node = prev_node
-		pick_time = prev_end_time
-
-	delivery_node = int(op.delivery_node)
-	transport_time = float(calculate_distance(int(pickup_node), int(delivery_node)))
-	arrive_delivery = pick_time + transport_time
-
-	station_prev_end = float(station_available_time.get(delivery_node, 0.0))
-	station_start = max(arrive_delivery, station_prev_end, op_ready_time)
-	return float(max(0.0, station_start - arrive_delivery))
+	return random.choice(feasible)
 
 
 def _estimate_completion_time(
@@ -239,7 +190,7 @@ def _estimate_completion_time(
 	return (float(end_time), float(needs_refill), float(pick_dist))
 
 
-def _choose_amr_for_op_a6(
+def _choose_amr_for_op_a4(
 	js: TaskState,
 	op: Operation,
 	amrs: Dict[int, AMRState],
@@ -344,12 +295,12 @@ def _schedule_one_operation(
 		"to_pick_travel": float(to_pick_travel),
 		"idle_before_pick": float(idle_before_pick),
 		# metadata
-		"policy": "max_proc_time",
+		"policy": "a4",
 		"needs_refill": bool(needs_refill),
 	}
 
 
-def dispatch_a6_event(
+def dispatch_a4_event(
 	jobs_raw: List[dict],
 	dispatch_time: float,
 	amr_available_time: Dict[int, float],
@@ -381,11 +332,11 @@ def dispatch_a6_event(
 
 	records: List[dict] = []
 	while tasks:
-		tsk = _choose_task_by_max_proc_time(tasks, amrs)
+		tsk = _choose_random_task(tasks, amrs)
 		if tsk is None:
 			break
 		op = tsk.op
-		m = _choose_amr_for_op_a6(tsk, op, amrs, station_available_time)
+		m = _choose_amr_for_op_a4(tsk, op, amrs, station_available_time)
 		rec = _schedule_one_operation(tsk, op, amrs[m], station_available_time)
 		records.append(rec)
 		tasks.remove(tsk)
@@ -393,7 +344,7 @@ def dispatch_a6_event(
 	if tasks:
 		raise RuntimeError(
 			"Dispatch could not schedule all tasks under the current constraints. "
-			"This usually indicates an infeasible type/AMR/inventory configuration."
+			"This usually indicates an infeasible type/AMR/inventory mapuration."
 		)
 
 	# Push AMR states back to globals (across events)
@@ -443,9 +394,9 @@ def process_event_line_visual(line: str, ax, out_f):
 		)
 	visualization.rebuild_top_lane(ax)
 
-	# Dispatch using DPR a6
+	# Dispatch using DPR a4
 	_t_wall_start = pytime.perf_counter()
-	records = dispatch_a6_event(
+	records = dispatch_a4_event(
 		jobs_raw,
 		dispatch_time=dispatch_time,
 		amr_available_time=agv_available_time,
@@ -529,7 +480,7 @@ def process_event_line_visual(line: str, ax, out_f):
 
 		rec_out = {
 			"generated_at": dispatch_time,
-			"policy": "a6",
+			"policy": "a4",
 			"amr": amr,
 			"jid": jid,
 			"type": jtype,

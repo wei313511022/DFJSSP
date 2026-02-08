@@ -21,8 +21,8 @@ from visualization import (
     UPDATE_INTERVAL_MS
 )
 
-# ===================== MILP CONFIG / LOGIC =====================
-from config import (
+# ===================== MILP map / LOGIC =====================
+from map import (
     TIME_LIMIT,
     GRID_SIZE,
     TYPE_TO_MATERIAL_NODE,

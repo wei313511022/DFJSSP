@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""DPR-4 (random-op)
+"""DPR-1 (type-based)
 
-- Randomly choose the next feasible operation.
+- Select job type by the largest remaining total processing time.
+- Operations have no precedence (can be scheduled in any order).
 - Assign AMR by earliest completion time (includes travel, station wait, and proc_time).
-- Other behavior (inventory, visualization, routing) matches DPR-1.
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ from visualization import (
     UPDATE_INTERVAL_MS
 )
 
-# ===================== FIELD CONFIG =====================
+# ===================== FIELD map =====================
 
-from config import (
+from map import (
 	TIME_LIMIT,
 	GRID_SIZE,
 	TYPE_TO_MATERIAL_NODE,
@@ -49,7 +49,7 @@ from calcu_dist import make_calculate_distance
 calculate_distance = make_calculate_distance(GRID_SIZE, BARRIER_NODES)
 
 
-# ===================== DPR(a4) DISPATCHING LOGIC =====================
+# ===================== DPR(a1) DISPATCHING LOGIC =====================
 
 
 @dataclass
@@ -138,18 +138,110 @@ def _amr_is_material_compatible(amr: AMRState, op: Operation) -> bool:
 	return True
 
 
-def _choose_random_task(
+def _choose_next_type_by_remaining_time(
 	tasks: List[TaskState],
 	amrs: Dict[int, AMRState],
-) -> Optional[TaskState]:
-	feasible: List[TaskState] = []
+) -> Optional[str]:
+	"""Pick job type with the largest remaining processing time among feasible types."""
+	rem: Dict[str, float] = {}
+	feasible_types = set()
 	for tsk in tasks:
+		t = str(tsk.op.jtype).upper()
+		rem[t] = float(rem.get(t, 0.0)) + float(tsk.op.proc_time)
 		eligible = _eligible_amrs_for_op(tsk.op)
 		if any(_amr_is_material_compatible(amrs[m], tsk.op) for m in eligible):
-			feasible.append(tsk)
-	if not feasible:
+			feasible_types.add(t)
+
+	if not feasible_types:
 		return None
-	return random.choice(feasible)
+
+	best = max(rem[t] for t in feasible_types)
+	tied = [t for t in feasible_types if abs(rem[t] - best) <= 1e-12]
+	return str(random.choice(tied)).upper()
+
+
+def _estimate_required_station_wait(
+	tsk: TaskState,
+	amr: AMRState,
+	station_available_time: Dict[int, float],
+) -> float:
+	"""Estimate this task's station-queue wait time if executed next on this AMR.
+
+	Matches the wait_time definition used in _schedule_one_operation:
+	wait_time = station_start - arrive_delivery (clipped at 0).
+	"""
+	op = tsk.op
+	t = str(op.jtype).upper()
+
+	prev_end_time = float(amr.available_time)
+	prev_node = int(amr.current_node)
+	op_ready_time = float(tsk.release_time)
+
+	onboard_qty = int(amr.inv.get(t, 0))
+	needs_refill = onboard_qty <= 0
+	if needs_refill:
+		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
+		to_pick_travel = float(calculate_distance(prev_node, pickup_node))
+		pick_time = prev_end_time + to_pick_travel
+	else:
+		pickup_node = prev_node
+		pick_time = prev_end_time
+
+	delivery_node = int(op.delivery_node)
+	transport_time = float(calculate_distance(int(pickup_node), int(delivery_node)))
+	arrive_delivery = pick_time + transport_time
+
+	station_prev_end = float(station_available_time.get(delivery_node, 0.0))
+	station_start = max(arrive_delivery, station_prev_end, op_ready_time)
+	return float(max(0.0, station_start - arrive_delivery))
+
+
+def _choose_task_of_type(
+	tasks: List[TaskState],
+	chosen_type: str,
+	amrs: Dict[int, AMRState],
+	station_available_time: Dict[int, float],
+) -> Optional[TaskState]:
+	"""Pick a task of the chosen type with deterministic tie-breaks.
+
+	Rule:
+	1) longest processing time (desc)
+	2) smallest required waiting time (asc)
+	3) smallest job id (asc)
+	"""
+	pool = [t for t in tasks if str(t.op.jtype).upper() == str(chosen_type).upper()]
+	if not pool:
+		return None
+
+	best_tsk: Optional[TaskState] = None
+	best_key: Optional[Tuple[float, float, int]] = None
+
+	for tsk in pool:
+		eligible = _eligible_amrs_for_op(tsk.op)
+		eligible = [m for m in eligible if _amr_is_material_compatible(amrs[m], tsk.op)]
+		if not eligible:
+			continue
+
+		# Compute the best (minimum) station-wait achievable among eligible AMRs.
+		best_wait = float("inf")
+		for m in eligible:
+			try:
+				w = _estimate_required_station_wait(tsk, amrs[m], station_available_time)
+			except Exception:
+				continue
+			if w < best_wait:
+				best_wait = w
+
+		if best_wait == float("inf"):
+			continue
+
+		# Key to MINIMIZE; proc_time is negated to prefer larger.
+		key = (-float(tsk.op.proc_time), float(best_wait), int(tsk.jid))
+		if best_key is None or key < best_key:
+			best_key = key
+			best_tsk = tsk
+
+	return best_tsk
 
 
 def _estimate_completion_time(
@@ -190,7 +282,7 @@ def _estimate_completion_time(
 	return (float(end_time), float(needs_refill), float(pick_dist))
 
 
-def _choose_amr_for_op_a4(
+def _choose_amr_for_op_a1(
 	js: TaskState,
 	op: Operation,
 	amrs: Dict[int, AMRState],
@@ -295,12 +387,12 @@ def _schedule_one_operation(
 		"to_pick_travel": float(to_pick_travel),
 		"idle_before_pick": float(idle_before_pick),
 		# metadata
-		"policy": "a4",
+		"policy": "type_remaining_time",
 		"needs_refill": bool(needs_refill),
 	}
 
 
-def dispatch_a4_event(
+def dispatch_a1_event(
 	jobs_raw: List[dict],
 	dispatch_time: float,
 	amr_available_time: Dict[int, float],
@@ -332,11 +424,15 @@ def dispatch_a4_event(
 
 	records: List[dict] = []
 	while tasks:
-		tsk = _choose_random_task(tasks, amrs)
+		chosen_type = _choose_next_type_by_remaining_time(tasks, amrs)
+		if chosen_type is None:
+			break
+		tsk = _choose_task_of_type(tasks, chosen_type, amrs, station_available_time)
 		if tsk is None:
+			# Should not happen with the current material rules.
 			break
 		op = tsk.op
-		m = _choose_amr_for_op_a4(tsk, op, amrs, station_available_time)
+		m = _choose_amr_for_op_a1(tsk, op, amrs, station_available_time)
 		rec = _schedule_one_operation(tsk, op, amrs[m], station_available_time)
 		records.append(rec)
 		tasks.remove(tsk)
@@ -344,7 +440,7 @@ def dispatch_a4_event(
 	if tasks:
 		raise RuntimeError(
 			"Dispatch could not schedule all tasks under the current constraints. "
-			"This usually indicates an infeasible type/AMR/inventory configuration."
+			"This usually indicates an infeasible type/AMR/inventory mapuration."
 		)
 
 	# Push AMR states back to globals (across events)
@@ -370,7 +466,6 @@ amr_inventory: Dict[int, Dict[str, int]] = {m: {} for m in M_SET}
 # File tail progress tracking
 _lines_consumed: int = 0
 
-
 def process_event_line_visual(line: str, ax, out_f):
 
 	try:
@@ -394,9 +489,9 @@ def process_event_line_visual(line: str, ax, out_f):
 		)
 	visualization.rebuild_top_lane(ax)
 
-	# Dispatch using DPR a4
+	# Dispatch using DPR a1
 	_t_wall_start = pytime.perf_counter()
-	records = dispatch_a4_event(
+	records = dispatch_a1_event(
 		jobs_raw,
 		dispatch_time=dispatch_time,
 		amr_available_time=agv_available_time,
@@ -480,7 +575,7 @@ def process_event_line_visual(line: str, ax, out_f):
 
 		rec_out = {
 			"generated_at": dispatch_time,
-			"policy": "a4",
+			"policy": "a1",
 			"amr": amr,
 			"jid": jid,
 			"type": jtype,
