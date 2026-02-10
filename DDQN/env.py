@@ -1,0 +1,993 @@
+import math
+from collections import defaultdict, deque
+from heapq import heappop, heappush
+from typing import Dict, List, Optional, Tuple, Union
+
+import numpy as np
+
+from data_io import record_to_jobs
+
+Coord = Tuple[int, int]
+
+
+class TaskSchedulingEnv:
+    """
+    Event-driven dispatch with station mutual exclusion and AMR collision avoidance.
+    Decision point:
+      - at least one idle AMR at current time
+      - AND there exists at least one available task (released jobs)
+    Action:
+      - choose which task (index in available_tasks) to assign to current_robot
+    Objective:
+      - minimize makespan
+    """
+
+    def __init__(self):
+        # 10 columns x 10 rows (x:0..9, y:0..9)
+        self.W = 10
+        self.H = 10
+
+        # Obstacles
+        self.obstacles = set()
+        for y in range(0, 3):
+            self.obstacles.add((6, y))
+        for y in range(4, 7):
+            self.obstacles.add((6, y))
+        for y in range(8, 10):
+            self.obstacles.add((6, y))
+
+        # Sources: A/B/C => MA/MB/MC
+        self.source_locs: Dict[str, Coord] = {
+            "A": (0, 7),
+            "B": (0, 4),
+            "C": (0, 1),
+        }
+
+        # Stations: S1/S2/S3/S4/S5
+        self.station_locs: Dict[str, Coord] = {
+            "S1": (9, 8),
+            "S2": (9, 6),
+            "S3": (9, 4),
+            "S4": (9, 2),
+            "S5": (9, 0),
+        }
+
+        self.num_robots = 3
+        self.material_types = ["A", "B", "C"]
+        self.capacity_per_type = 3
+        # If True, action space includes proactive replenishment even when inventory > 0.
+        self.allow_proactive_replenish = True
+        self.initial_robot_positions: List[Coord] = [
+            (2, 1),
+            (2, 4),
+            (2, 7),
+        ]
+
+        self.dist_cache: Dict[Tuple[Coord, Coord], int] = {}
+        self.path_cache: Dict[Tuple[Coord, Coord], List[Coord]] = {}
+        self._reservation_cache: Dict[Tuple[int, float, int, int], dict] = {}
+        self.reset([])
+
+    def _in_bounds(self, x: int, y: int) -> bool:
+        return 0 <= x < self.W and 0 <= y < self.H
+
+    def _passable(self, x: int, y: int) -> bool:
+        return (x, y) not in self.obstacles
+
+    def _bfs_distance(self, start: Coord, goal: Coord) -> int:
+        if start == goal:
+            return 0
+        if (start, goal) in self.dist_cache:
+            return self.dist_cache[(start, goal)]
+        _ = self._bfs_path(start, goal)
+        return self.dist_cache.get((start, goal), 10**9)
+
+    def _bfs_path(self, start: Coord, goal: Coord) -> List[Coord]:
+        if start == goal:
+            return [start]
+        if (start, goal) in self.path_cache:
+            return self.path_cache[(start, goal)]
+
+        sx, sy = start
+        visited = {start}
+        parent: Dict[Coord, Coord] = {}
+        dq = deque([(sx, sy)])
+
+        found = False
+        while dq:
+            x, y = dq.popleft()
+            for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                nx, ny = x + dx, y + dy
+                nxt = (nx, ny)
+                if not self._in_bounds(nx, ny) or not self._passable(nx, ny):
+                    continue
+                if nxt in visited:
+                    continue
+                visited.add(nxt)
+                parent[nxt] = (x, y)
+                if nxt == goal:
+                    found = True
+                    dq.clear()
+                    break
+                dq.append(nxt)
+
+        if not found:
+            self.path_cache[(start, goal)] = [start]
+            self.path_cache[(goal, start)] = [goal]
+            self.dist_cache[(start, goal)] = 10**9
+            self.dist_cache[(goal, start)] = 10**9
+            return self.path_cache[(start, goal)]
+
+        path: List[Coord] = [goal]
+        cur = goal
+        while cur != start:
+            cur = parent[cur]
+            path.append(cur)
+        path.reverse()
+
+        rev = list(reversed(path))
+        self.path_cache[(start, goal)] = path
+        self.path_cache[(goal, start)] = rev
+        d = len(path) - 1
+        self.dist_cache[(start, goal)] = d
+        self.dist_cache[(goal, start)] = d
+        return path
+
+    def _dist(self, a: Coord, b: Coord) -> int:
+        return self._bfs_distance(a, b)
+
+    def _path(self, a: Coord, b: Coord) -> List[Coord]:
+        return self._bfs_path(a, b)
+
+    @staticmethod
+    def _time_key(t: float) -> float:
+        return round(float(t), 6)
+
+    @staticmethod
+    def _interval_overlap(a0: float, a1: float, b0: float, b1: float) -> bool:
+        return max(a0, b0) < min(a1, b1) - 1e-9
+
+    @staticmethod
+    def _to_coord(p: Union[List[int], Tuple[int, int], Coord]) -> Coord:
+        return (int(p[0]), int(p[1]))
+
+    def _neighbors_with_wait(self, c: Coord) -> List[Coord]:
+        x, y = c
+        out: List[Coord] = [c]
+        for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            nx, ny = x + dx, y + dy
+            if self._in_bounds(nx, ny) and self._passable(nx, ny):
+                out.append((nx, ny))
+        return out
+
+    def _build_dynamic_reservations(
+        self,
+        exclude_robot: int,
+        from_time: float,
+        horizon_end: float,
+        future_work_after_dispatch: bool,
+    ) -> dict:
+        key = (
+            exclude_robot,
+            self._time_key(from_time),
+            self._dispatch_counter,
+            1 if future_work_after_dispatch else 0,
+        )
+        cached = self._reservation_cache.get(key)
+        if cached is not None and float(cached["horizon_end"]) >= horizon_end - 1e-9:
+            return cached["data"]
+
+        points: Dict[float, set] = defaultdict(set)
+        intervals: Dict[Coord, List[Tuple[float, float]]] = defaultdict(list)
+        edges: Dict[Tuple[Coord, Coord], List[Tuple[float, float]]] = defaultdict(list)
+
+        def add_point(t: float, c: Coord) -> None:
+            if t < from_time - 1e-9 or t > horizon_end + 1e-9:
+                return
+            points[self._time_key(t)].add(self._to_coord(c))
+
+        def add_interval(c: Coord, t0: float, t1: float) -> None:
+            if t1 <= t0 + 1e-9:
+                return
+            if t1 < from_time - 1e-9 or t0 > horizon_end + 1e-9:
+                return
+            a = max(float(t0), float(from_time))
+            b = min(float(t1), float(horizon_end))
+            if b <= a + 1e-9:
+                return
+            cell = self._to_coord(c)
+            intervals[cell].append((a, b))
+            # Keep interval endpoints as occupied points as well to prevent
+            # same-timestamp overlap at hand-off boundaries.
+            add_point(a, cell)
+            add_point(b, cell)
+
+        def add_edge(a: Coord, b: Coord, t0: float, t1: float) -> None:
+            if t1 <= t0 + 1e-9:
+                return
+            if t1 < from_time - 1e-9 or t0 > horizon_end + 1e-9:
+                return
+            x0 = max(float(t0), float(from_time))
+            x1 = min(float(t1), float(horizon_end))
+            if x1 <= x0 + 1e-9:
+                return
+            k = (self._to_coord(a), self._to_coord(b))
+            edges[k].append((x0, x1))
+
+        actions_by_robot: Dict[int, List[dict]] = {rid: [] for rid in range(self.num_robots)}
+        next_release_t = (
+            float(self.release_events[self.release_idx][0])
+            if self.release_idx < len(self.release_events)
+            else float("inf")
+        )
+
+        for item in self.trace:
+            rid = int(item.get("robot", -1))
+            if rid < 0 or rid == exclude_robot:
+                continue
+
+            segs: Dict[str, dict] = {}
+            for seg in item.get("segments", []):
+                kind = seg.get("kind")
+                if kind:
+                    segs[kind] = seg
+
+            raw_path = item.get("transport_path", [])
+            path = [self._to_coord(p) for p in raw_path] if raw_path else []
+            if not path:
+                drop = item.get("drop", (0, 0))
+                path = [self._to_coord(drop)]
+
+            end_cell = path[-1]
+            seg_t = segs.get("transport")
+            if seg_t is not None:
+                ts = float(seg_t.get("start", from_time))
+                te = float(seg_t.get("end", ts))
+                if len(path) == 1 or te <= ts + 1e-9:
+                    add_point(ts, path[0])
+                    add_point(te, path[-1])
+                else:
+                    dt = (te - ts) / float(len(path) - 1)
+                    for i, c in enumerate(path):
+                        add_point(ts + dt * i, c)
+                    for i in range(len(path) - 1):
+                        c0 = path[i]
+                        c1 = path[i + 1]
+                        t0 = ts + dt * i
+                        t1 = t0 + dt
+                        if c0 == c1:
+                            add_interval(c0, t0, t1)
+                        else:
+                            add_edge(c0, c1, t0, t1)
+
+            seg_w = segs.get("wait")
+            if seg_w is not None:
+                add_interval(
+                    end_cell,
+                    float(seg_w.get("start", 0.0)),
+                    float(seg_w.get("end", 0.0)),
+                )
+
+            seg_p = segs.get("process")
+            if seg_p is not None:
+                add_interval(
+                    end_cell,
+                    float(seg_p.get("start", 0.0)),
+                    float(seg_p.get("end", 0.0)),
+                )
+
+            seg_transport = segs.get("transport")
+            t_start = float(seg_transport.get("start", 0.0)) if seg_transport else 0.0
+            t_end = 0.0
+            if seg_p is not None:
+                t_end = float(seg_p.get("end", 0.0))
+            elif seg_w is not None:
+                t_end = float(seg_w.get("end", 0.0))
+            elif seg_transport is not None:
+                t_end = float(seg_transport.get("end", t_start))
+            else:
+                t_end = t_start
+
+            actions_by_robot[rid].append(
+                {
+                    "start": t_start,
+                    "end": t_end,
+                    "idle_cell": self._to_coord(item.get("post_pos", end_cell)),
+                }
+            )
+
+        # Reserve known idle intervals between committed actions and after
+        # the last committed action within planning horizon.
+        for rid in range(self.num_robots):
+            if rid == exclude_robot:
+                continue
+
+            robot_actions = actions_by_robot[rid]
+            robot_actions.sort(key=lambda a: float(a["start"]))
+
+            idle_pos = self._to_coord(self.initial_robot_positions[rid])
+            idle_from = 0.0
+            for act in robot_actions:
+                act_start = float(act["start"])
+                if act_start > idle_from + 1e-9:
+                    add_interval(idle_pos, idle_from, act_start)
+                idle_pos = self._to_coord(act["idle_cell"])
+                idle_from = max(idle_from, float(act["end"]))
+
+            if future_work_after_dispatch:
+                # Post-action tail is uncertain (other robots may get new
+                # dispatches), so reserve only immediate occupancy.
+                if math.isfinite(next_release_t):
+                    tail_end = min(horizon_end, max(idle_from, next_release_t))
+                else:
+                    tail_end = min(horizon_end, idle_from + 1.0)
+            else:
+                # No further work is expected after this dispatch, keep tail
+                # occupied to avoid final-stage overlap.
+                tail_end = horizon_end
+
+            add_interval(idle_pos, idle_from, tail_end)
+            add_point(idle_from, idle_pos)
+
+        data = {
+            "points": {k: set(v) for k, v in points.items()},
+            "intervals": {k: sorted(v) for k, v in intervals.items()},
+            "edges": {k: sorted(v) for k, v in edges.items()},
+        }
+        self._reservation_cache[key] = {"horizon_end": float(horizon_end), "data": data}
+        return data
+
+    def _point_conflict(self, reservations: dict, c: Coord, t: float) -> bool:
+        cell = self._to_coord(c)
+        pts = reservations["points"].get(self._time_key(t), set())
+        if cell in pts:
+            return True
+        for a, b in reservations["intervals"].get(cell, []):
+            if a - 1e-9 <= t < b - 1e-9:
+                return True
+        return False
+
+    def _transition_conflict(
+        self,
+        reservations: dict,
+        c0: Coord,
+        c1: Coord,
+        t0: float,
+        t1: float,
+        ignore_source_point_at_t0: bool = False,
+    ) -> bool:
+        a = self._to_coord(c0)
+        b = self._to_coord(c1)
+
+        if (not ignore_source_point_at_t0) and self._point_conflict(reservations, a, t0):
+            return True
+        if self._point_conflict(reservations, b, t1):
+            return True
+
+        if a == b:
+            for x0, x1 in reservations["intervals"].get(a, []):
+                if self._interval_overlap(t0, t1, x0, x1):
+                    return True
+            return False
+
+        for x0, x1 in reservations["edges"].get((a, b), []):
+            if self._interval_overlap(t0, t1, x0, x1):
+                return True
+        for x0, x1 in reservations["edges"].get((b, a), []):
+            if self._interval_overlap(t0, t1, x0, x1):
+                return True
+        return False
+
+    def _plan_path_time_aware(
+        self,
+        start: Coord,
+        goal: Coord,
+        start_time: float,
+        reservations: dict,
+        min_arrival_time: float = 0.0,
+        block_goal_before_min: bool = False,
+        max_steps: int = 200,
+    ) -> List[Coord]:
+        s = self._to_coord(start)
+        g = self._to_coord(goal)
+
+        if max_steps <= 0:
+            return []
+        if not self._in_bounds(s[0], s[1]) or not self._passable(s[0], s[1]):
+            return []
+        if not self._in_bounds(g[0], g[1]) or not self._passable(g[0], g[1]):
+            return []
+
+        if (
+            s == g
+            and (not block_goal_before_min or start_time + 1e-9 >= min_arrival_time)
+            and not self._point_conflict(reservations, s, start_time)
+        ):
+            return [s]
+
+        heap: List[Tuple[float, int, Coord]] = []
+        h0 = float(self._dist(s, g))
+        heappush(heap, (h0, 0, s))
+
+        parent: Dict[Tuple[Coord, int], Optional[Tuple[Coord, int]]] = {(s, 0): None}
+        seen = {(s, 0)}
+
+        while heap:
+            _f, step, cur = heappop(heap)
+            t_cur = start_time + float(step)
+            state = (cur, step)
+
+            if cur == g and (not block_goal_before_min or t_cur + 1e-9 >= min_arrival_time):
+                out: List[Coord] = []
+                p: Optional[Tuple[Coord, int]] = state
+                while p is not None:
+                    out.append(p[0])
+                    p = parent[p]
+                out.reverse()
+                return out
+
+            if step >= max_steps:
+                continue
+
+            for nxt in self._neighbors_with_wait(cur):
+                t_nxt = t_cur + 1.0
+                if block_goal_before_min and nxt == g and t_nxt + 1e-9 < min_arrival_time:
+                    continue
+                ignore_t0 = step == 0
+                if self._transition_conflict(
+                    reservations,
+                    cur,
+                    nxt,
+                    t_cur,
+                    t_nxt,
+                    ignore_source_point_at_t0=ignore_t0,
+                ):
+                    continue
+
+                nxt_state = (nxt, step + 1)
+                if nxt_state in seen:
+                    continue
+                seen.add(nxt_state)
+                parent[nxt_state] = state
+
+                h = float(self._dist(nxt, g))
+                lb = float(step + 1) + h
+                if block_goal_before_min:
+                    est_t = start_time + lb
+                    if est_t < min_arrival_time:
+                        lb += min_arrival_time - est_t
+                heappush(heap, (lb, step + 1, nxt))
+
+        return []
+
+    def _delay_before_goal(self, path: List[Coord], wait_steps: int) -> List[Coord]:
+        if wait_steps <= 0 or not path:
+            return list(path)
+        if len(path) >= 2:
+            hold = path[-2]
+            return list(path[:-1]) + [hold] * wait_steps + [path[-1]]
+
+        start = path[0]
+        for nxt in self._neighbors_with_wait(start):
+            if nxt != start:
+                return [start, nxt] + [nxt] * wait_steps + [start]
+        return list(path) + [start] * wait_steps
+
+    def _post_process_candidates(self, transport_path: List[Coord], drop: Coord) -> List[Coord]:
+        d = self._to_coord(drop)
+        rev_distinct: List[Coord] = []
+        for i in range(len(transport_path) - 2, -1, -1):
+            c = self._to_coord(transport_path[i])
+            if c == d:
+                continue
+            if not rev_distinct or rev_distinct[-1] != c:
+                rev_distinct.append(c)
+
+        candidates: List[Coord] = []
+        if len(rev_distinct) >= 2:
+            candidates.append(rev_distinct[1])
+        if len(rev_distinct) >= 1:
+            candidates.append(rev_distinct[0])
+        for c in rev_distinct[2:]:
+            candidates.append(c)
+
+        for nxt in self._neighbors_with_wait(d):
+            if nxt != d:
+                candidates.append(self._to_coord(nxt))
+
+        candidates.append(d)
+
+        out: List[Coord] = []
+        seen = set()
+        for c in candidates:
+            cc = self._to_coord(c)
+            if cc in seen:
+                continue
+            seen.add(cc)
+            out.append(cc)
+        return out
+
+    def _post_process_position(self, transport_path: List[Coord], drop: Coord) -> Coord:
+        cands = self._post_process_candidates(transport_path, drop)
+        return cands[0] if cands else self._to_coord(drop)
+
+    def _estimate_action_plan(self, robot_id: int, task: dict, replenish: int) -> dict:
+        pos = self._to_coord(self.robot_positions[robot_id])
+        pickup = self._to_coord(task["pickup"])
+        drop = self._to_coord(task["drop"])
+        station = str(task["station"])
+        jtype = str(task["type"]).upper()
+        proc = float(task["proc_time"])
+
+        start_t = max(self.t, self.robot_free_times[robot_id])
+        station_free = float(self.station_busy_until[station])
+
+        inv = int(self.robot_inventory[robot_id][jtype])
+        need_pickup = bool(replenish > 0 or inv == 0)
+
+        if need_pickup:
+            base_dist = float(self._dist(pos, pickup) + self._dist(pickup, drop))
+        else:
+            base_dist = float(self._dist(pos, drop))
+
+        future_work_after_dispatch = (len(self.available_tasks) > 1) or (
+            self.release_idx < len(self.release_events)
+        )
+        slack = max(0.0, station_free - start_t)
+
+        def leg_candidates_steps(
+            a: Coord,
+            b: Coord,
+            t0: float,
+            min_arr: float,
+            horizon: float,
+        ) -> List[int]:
+            leg_dist = float(self._dist(a, b))
+            extra = max(0.0, min_arr - t0)
+            horizon_cap = int(max(1, math.floor(horizon - t0 + 1e-9)))
+            base = [
+                int(max(30, math.ceil(leg_dist + extra + 20.0))),
+                int(max(60, math.ceil(leg_dist + extra + 80.0))),
+                int(max(120, math.ceil(leg_dist + extra + 220.0))),
+                horizon_cap,
+            ]
+            out: List[int] = []
+            for x in base:
+                x = int(min(max(1, x), horizon_cap))
+                if x not in out:
+                    out.append(x)
+            return out
+
+        def plan_leg(
+            a: Coord,
+            b: Coord,
+            t0: float,
+            min_arr: float,
+            block_goal: bool,
+            reservations: dict,
+            horizon: float,
+        ) -> List[Coord]:
+            for max_steps in leg_candidates_steps(a, b, t0, min_arr, horizon):
+                out = self._plan_path_time_aware(
+                    a,
+                    b,
+                    t0,
+                    reservations,
+                    min_arrival_time=min_arr,
+                    block_goal_before_min=block_goal,
+                    max_steps=max_steps,
+                )
+                if out:
+                    return out
+            return []
+
+        base_budget = float(max(80.0, math.ceil(base_dist + slack + 80.0)))
+        budget_scales = [1.0, 1.8, 3.0, 5.0, 8.0, 12.0, 18.0]
+        transport_path: List[Coord] = []
+
+        tail_modes = [future_work_after_dispatch]
+        if not future_work_after_dispatch:
+            tail_modes.append(True)
+
+        for tail_mode in tail_modes:
+            for scale in budget_scales:
+                search_budget = int(max(80, math.ceil(base_budget * scale)))
+                horizon_end = start_t + float(search_budget + 5)
+                reservations = self._build_dynamic_reservations(
+                    robot_id,
+                    start_t,
+                    horizon_end,
+                    future_work_after_dispatch=tail_mode,
+                )
+
+                if need_pickup:
+                    p1 = plan_leg(
+                        pos,
+                        pickup,
+                        start_t,
+                        start_t,
+                        False,
+                        reservations,
+                        horizon_end,
+                    )
+                    if not p1:
+                        continue
+                    t_mid = start_t + float(max(0, len(p1) - 1))
+                    p2 = plan_leg(
+                        pickup,
+                        drop,
+                        t_mid,
+                        station_free,
+                        True,
+                        reservations,
+                        horizon_end,
+                    )
+                    if not p2:
+                        continue
+                    candidate = p1 + p2[1:] if len(p2) > 0 else p1
+                else:
+                    candidate = plan_leg(
+                        pos,
+                        drop,
+                        start_t,
+                        station_free,
+                        True,
+                        reservations,
+                        horizon_end,
+                    )
+                    if not candidate:
+                        continue
+
+                transport_path = [self._to_coord(p) for p in candidate]
+                break
+
+            if transport_path:
+                break
+
+        if not transport_path:
+            raise RuntimeError(
+                f"No collision-free path for AMR{robot_id+1}: {pos}->{drop} at t={start_t:.3f}"
+            )
+
+        travel = float(max(0, len(transport_path) - 1))
+        arrive_t = start_t + travel
+        process_start_t = max(arrive_t, station_free)
+
+        if process_start_t > arrive_t + 1e-9:
+            add_steps = int(math.ceil(process_start_t - arrive_t - 1e-9))
+            transport_path = self._delay_before_goal(transport_path, add_steps)
+            travel = float(max(0, len(transport_path) - 1))
+            arrive_t = start_t + travel
+            process_start_t = max(arrive_t, station_free)
+
+        wait = max(0.0, process_start_t - arrive_t)
+        return {
+            "start_t": float(start_t),
+            "travel": float(travel),
+            "wait": float(wait),
+            "proc": float(proc),
+            "arrive_t": float(arrive_t),
+            "process_start_t": float(process_start_t),
+            "transport_path": [self._to_coord(p) for p in transport_path],
+            "need_pickup": bool(need_pickup),
+        }
+
+    def _normalize_release_times(
+        self, release_events: List[Tuple[float, List[dict]]]
+    ) -> List[Tuple[float, List[dict]]]:
+        if not release_events:
+            return release_events
+        t0 = min(t for t, _ in release_events)
+        return [(t - t0, jobs) for (t, jobs) in release_events]
+
+    def _jobs_to_tasks(self, jobs: List[dict], release_time: float) -> List[dict]:
+        tasks = []
+        for j in jobs:
+            jid = int(j.get("jid", -1))
+            jtype = str(j.get("type", "")).upper()
+            proc_time = float(j.get("proc_time", 0.0))
+            st = j.get("station")
+
+            if jtype not in self.source_locs:
+                raise ValueError(f"Unknown job type: {jtype} (expect A/B/C)")
+
+            s_key = str(st)
+            if not s_key.startswith("S"):
+                s_key = "S" + s_key
+            if s_key not in self.station_locs:
+                raise ValueError(
+                    f"Unknown station: {st} (expect 1/2/3/4/5 or S1/S2/S3/S4/S5)"
+                )
+
+            tasks.append(
+                {
+                    "jid": jid,
+                    "type": jtype,
+                    "proc_time": proc_time,
+                    "pickup": self.source_locs[jtype],
+                    "drop": self.station_locs[s_key],
+                    "station": s_key,
+                    "release_time": float(release_time),
+                }
+            )
+        return tasks
+
+    def reset(self, scenario: Union[dict, List[dict]]) -> List[float]:
+        """
+        scenario can be:
+          - record dict: {"dispatch_time":..., "jobs":[...]}
+          - records list: [{"dispatch_time":..., "jobs":[...]}, ...]
+          - jobs list: [{"type","station",...}, ...]  (single batch, release at 0)
+        """
+        release_events: List[Tuple[float, List[dict]]] = []
+
+        if isinstance(scenario, dict) and "jobs" in scenario:
+            dt, jobs = record_to_jobs(scenario)
+            release_events.append((dt, jobs))
+        elif isinstance(scenario, list):
+            if len(scenario) == 0:
+                release_events = []
+            elif isinstance(scenario[0], dict) and "jobs" in scenario[0]:
+                for rec in scenario:
+                    dt, jobs = record_to_jobs(rec)
+                    release_events.append((dt, jobs))
+            else:
+                release_events.append((0.0, scenario))
+        else:
+            raise ValueError("Unsupported scenario format")
+
+        release_events.sort(key=lambda x: x[0])
+        self.release_events = self._normalize_release_times(release_events)
+        self.release_idx = 0
+
+        max_jid = -1
+        for _t, jobs in release_events:
+            for j in jobs:
+                if "jid" in j:
+                    try:
+                        max_jid = max(max_jid, int(j["jid"]))
+                    except Exception:
+                        pass
+        self._next_job_id = max_jid + 1
+
+        self.t = 0.0
+        self.available_tasks: List[dict] = []
+
+        self.robot_positions = self.initial_robot_positions.copy()
+        self.robot_free_times = [0.0] * self.num_robots
+        self.robot_inventory = [
+            {t: 0 for t in self.material_types} for _ in range(self.num_robots)
+        ]
+
+        self.station_busy_until: Dict[str, float] = {
+            k: 0.0 for k in self.station_locs.keys()
+        }
+
+        self.trace: List[dict] = []
+        self._dispatch_counter = 0
+        self._reservation_cache = {}
+
+        self._advance_to_decision_point()
+        return self._get_state()
+
+    def _release_until(self, t: float) -> None:
+        while self.release_idx < len(self.release_events):
+            rt, jobs = self.release_events[self.release_idx]
+            if rt <= t + 1e-9:
+                self.available_tasks.extend(self._jobs_to_tasks(jobs, release_time=rt))
+                self.release_idx += 1
+            else:
+                break
+
+    def enqueue_jobs(self, jobs: List[dict], dispatch_time: Optional[float] = None) -> None:
+        if dispatch_time is None:
+            dispatch_time = self.t
+        dispatch_time = float(dispatch_time)
+        if dispatch_time < self.t:
+            dispatch_time = self.t
+        if self.release_events:
+            last_t = self.release_events[-1][0]
+            if dispatch_time < last_t:
+                dispatch_time = last_t
+
+        jobs_copy = []
+        for j in jobs:
+            item = dict(j)
+            if item.get("jid", None) is None:
+                item["jid"] = self._next_job_id
+                self._next_job_id += 1
+            jobs_copy.append(item)
+
+        self.release_events.append((dispatch_time, jobs_copy))
+
+    def _advance_to_decision_point(self) -> None:
+        while True:
+            self._release_until(self.t)
+            idle = [
+                i for i in range(self.num_robots) if self.robot_free_times[i] <= self.t + 1e-9
+            ]
+
+            if idle and self.available_tasks:
+                self.current_robot = min(idle, key=lambda i: (self.robot_free_times[i], i))
+                self.current_time = self.t
+                return
+
+            if not self.available_tasks:
+                if self.release_idx < len(self.release_events):
+                    self.t = max(self.t, self.release_events[self.release_idx][0])
+                    continue
+                self.current_robot = int(np.argmin(self.robot_free_times))
+                self.current_time = self.t
+                return
+
+            self.t = max(self.t, min(self.robot_free_times))
+
+    def done(self) -> bool:
+        self._release_until(self.t)
+        return (len(self.available_tasks) == 0) and (self.release_idx >= len(self.release_events))
+
+    def makespan(self) -> float:
+        return float(max(self.robot_free_times)) if self.robot_free_times else 0.0
+
+    def _get_state(self) -> List[float]:
+        """
+        State:
+          - current_robot one-hot (3)
+          - available task count (1)
+          - current time t (1)
+          - for each robot: free_time, x, y, invA, invB, invC (18)
+          - station busy_until S1,S2,S3,S4,S5 (5)
+        total = 28
+        """
+        st: List[float] = []
+        onehot = [0.0] * self.num_robots
+        onehot[self.current_robot] = 1.0
+        st.extend(onehot)
+
+        st.append(float(len(self.available_tasks)))
+        st.append(float(self.t))
+
+        for rid in range(self.num_robots):
+            st.append(float(self.robot_free_times[rid]))
+            x, y = self.robot_positions[rid]
+            st.append(float(x))
+            st.append(float(y))
+            inv = self.robot_inventory[rid]
+            for tkey in self.material_types:
+                st.append(float(inv[tkey]))
+
+        for sname in ["S1", "S2", "S3", "S4", "S5"]:
+            st.append(float(self.station_busy_until[sname]))
+        return st
+
+    def action_features(
+        self, robot_id: int, task: dict, replenish: int
+    ) -> Tuple[float, float, float, float]:
+        """
+        Return (travel_time, wait_time, proc_time, replenish).
+        """
+        plan = self._estimate_action_plan(robot_id, task, replenish)
+        return plan["travel"], plan["wait"], plan["proc"], float(replenish)
+
+    def step(self, action: Tuple[int, int]):
+        """
+        Timeline:
+          start_t = max(env.t, robot_free_time)
+          transport [start_t, start_t+travel]
+          wait      [arrive, arrive+wait]
+          process   [arrive+wait, arrive+wait+proc_time]
+        """
+        if isinstance(action, tuple):
+            action_index, replenish = action
+        else:
+            action_index = int(action)
+            replenish = 0
+
+        if action_index < 0 or action_index >= len(self.available_tasks):
+            raise ValueError(
+                f"Invalid action_index {action_index}, available={len(self.available_tasks)}"
+            )
+        if replenish < 0:
+            raise ValueError(f"Invalid replenish {replenish}")
+
+        rid = self.current_robot
+        task = self.available_tasks[action_index]
+
+        jtype = task["type"]
+        station = task["station"]
+        jid = task["jid"]
+        inv = self.robot_inventory[rid][jtype]
+        max_add = self.capacity_per_type - inv
+        if replenish > max_add:
+            raise ValueError(f"Invalid replenish {replenish} for inv={inv}")
+        if inv == 0 and replenish == 0:
+            raise ValueError("Invalid action: replenish=0 with empty inventory")
+
+        plan = self._estimate_action_plan(rid, task, replenish)
+        start_t = float(plan["start_t"])
+        travel = float(plan["travel"])
+        wait = float(plan["wait"])
+        proc = float(plan["proc"])
+        need_pickup = bool(plan["need_pickup"])
+        transport_path = [self._to_coord(p) for p in plan["transport_path"]]
+
+        self.available_tasks.pop(action_index)
+
+        if replenish > 0:
+            self.robot_inventory[rid][jtype] = min(self.capacity_per_type, inv + replenish)
+        self.robot_inventory[rid][jtype] = max(0, self.robot_inventory[rid][jtype] - 1)
+
+        t_travel_end = float(plan["arrive_t"])
+        t_wait_end = float(plan["process_start_t"])
+        t_proc_end = t_wait_end + proc
+
+        self.station_busy_until[station] = t_proc_end
+
+        post_pos = self._post_process_position(transport_path, self._to_coord(task["drop"]))
+        post_cands = self._post_process_candidates(transport_path, self._to_coord(task["drop"]))
+        post_res = self._build_dynamic_reservations(
+            rid,
+            t_proc_end,
+            t_proc_end + 3.0,
+            future_work_after_dispatch=True,
+        )
+        for cand in post_cands:
+            if self._point_conflict(post_res, cand, t_proc_end):
+                continue
+            if self._transition_conflict(
+                post_res,
+                cand,
+                cand,
+                t_proc_end,
+                t_proc_end + 1.0,
+                ignore_source_point_at_t0=True,
+            ):
+                continue
+            post_pos = self._to_coord(cand)
+            break
+
+        self.robot_free_times[rid] = t_proc_end
+        self.robot_positions[rid] = post_pos
+
+        self.trace.append(
+            {
+                "seq": self._dispatch_counter,
+                "robot": rid,
+                "jid": jid,
+                "replenish": replenish,
+                "type": jtype,
+                "src": jtype,
+                "dst": station,
+                "proc_time": proc,
+                "transport_path": transport_path,
+                "need_pickup": bool(need_pickup),
+                "pickup": task["pickup"],
+                "drop": task["drop"],
+                "post_pos": post_pos,
+                "segments": [
+                    {"kind": "transport", "start": start_t, "end": t_travel_end},
+                    {"kind": "wait", "start": t_travel_end, "end": t_wait_end},
+                    {"kind": "process", "start": t_wait_end, "end": t_proc_end},
+                ],
+            }
+        )
+        self._dispatch_counter += 1
+        self._reservation_cache = {}
+
+        next_release = (
+            self.release_events[self.release_idx][0]
+            if self.release_idx < len(self.release_events)
+            else float("inf")
+        )
+        next_robot_free = min(self.robot_free_times) if self.robot_free_times else float("inf")
+        next_event_t = min(next_release, next_robot_free)
+        if not math.isfinite(next_event_t):
+            next_event_t = self.makespan()
+        # Keep simulation time monotonic to avoid timeline rollback.
+        self.t = max(self.t, float(next_event_t))
+
+        self._advance_to_decision_point()
+
+        if self.done():
+            return None, -self.makespan(), True
+        return self._get_state(), 0.0, False

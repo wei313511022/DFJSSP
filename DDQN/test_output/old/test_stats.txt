@@ -1,0 +1,13 @@
+RUN|target=test_case|mode=each_line|scope=folder
+[test_5job.jsonl] CASE 000 jobs=5 mk=77.000 mk/job=15.400 mk/proc=0.906
+[test_5job.jsonl] CASE 000 route_jsonl=test_route_logs\test_5job_case_000_amr_path.jsonl lines=78
+[test_5job.jsonl] CASE 001 jobs=5 mk=91.000 mk/job=18.200 mk/proc=1.213
+[test_5job.jsonl] CASE 001 route_jsonl=test_route_logs\test_5job_case_001_amr_path.jsonl lines=92
+[test_5job.jsonl] CASE 002 jobs=5 mk=76.000 mk/job=15.200 mk/proc=1.169
+[test_5job.jsonl] CASE 002 route_jsonl=test_route_logs\test_5job_case_002_amr_path.jsonl lines=77
+[test_5job.jsonl] CASE 003 jobs=5 mk=76.000 mk/job=15.200 mk/proc=1.086
+[test_5job.jsonl] CASE 003 route_jsonl=test_route_logs\test_5job_case_003_amr_path.jsonl lines=77
+[test_5job.jsonl] CASE 004 jobs=5 mk=73.000 mk/job=14.600 mk/proc=1.043
+[test_5job.jsonl] CASE 004 route_jsonl=test_route_logs\test_5job_case_004_amr_path.jsonl lines=74
+PER_FILE|file=test_5job.jsonl|cases=5|mk_avg=78.600|mk_min=73.000|mk_max=91.000
+FOLDER SUMMARY (test_case)|cases=5|total_jobs=25|mk_avg=78.600|mk_std=6.344|mk_min=73.000|mk_max=91.000|mk_job_avg=15.720|mk_proc_avg=1.083

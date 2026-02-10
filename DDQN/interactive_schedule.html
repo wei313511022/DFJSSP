@@ -1,0 +1,123 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", "Noto Sans", Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      color: #1A202C;
+      background: #FFFFFF;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 20px;
+      border-bottom: 1px solid #E2E8F0;
+      background: #F8FAFC;
+    }
+    .controls label {
+      font-size: 13px;
+      letter-spacing: 0.2px;
+    }
+    .controls input[type=number] {
+      width: 90px;
+      padding: 6px 8px;
+      border: 1px solid #CBD5E0;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .controls input[type=range] {
+      flex: 1;
+      height: 6px;
+      accent-color: #2B6CB0;
+    }
+    .controls button {
+      padding: 6px 12px;
+      border: 1px solid #CBD5E0;
+      border-radius: 6px;
+      background: #FFFFFF;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #plot { width: 100%; height: 980px; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <button id="playBtn">Play</button>
+    <button id="pauseBtn">Pause</button>
+    <label>Center</label>
+    <input id="centerSlider" type="range" min="0" max="150.00" step="5.00" value="0" />
+    <label>Window</label>
+    <input id="windowInput" type="number" min="1" max="150.00" step="1" value="80.00" />
+    <span id="centerLabel">t=0.0s</span>
+  </div>
+  <div id="plot"></div>
+  <script>
+    const fig = {"data": [{"base": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "customdata": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "hovertemplate": "%{text}<br>arrival=%{customdata:.1f}s<br>sec=%{base:.0f}s<extra></extra>", "insidetextanchor": "middle", "marker": {"color": ["#2F855A", "#2B6CB0", "#2B6CB0", "#2F855A", "#DD6B20", "#DD6B20", "#2B6CB0", "#2F855A", "#2F855A", "#2B6CB0"]}, "name": "Input Queue", "orientation": "h", "text": ["J_0@S4", "J_1@S3", "J_2@S2", "J_3@S2", "J_4@S2", "J_5@S4", "J_6@S1", "J_7@S5", "J_8@S3", "J_9@S1"], "textposition": "inside", "x": [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0], "y": ["slot 1", "slot 2", "slot 3", "slot 4", "slot 5", "slot 6", "slot 7", "slot 8", "slot 9", "slot 10"], "type": "bar", "xaxis": "x", "yaxis": "y", "textfont": {"size": 14}}, {"base": [0.0, 20.0, 30.0, 40.0, 60.0, 75.0, 90.0, 100.0, 120.0, 140.0], "hovertemplate": "%{text}<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "insidetextanchor": "middle", "marker": {"color": ["#2F855A", "#2B6CB0", "#2B6CB0", "#2F855A", "#DD6B20", "#DD6B20", "#2B6CB0", "#2F855A", "#2F855A", "#2B6CB0"]}, "name": "Dispatching Queue", "orientation": "h", "text": ["J_0@S4", "J_1@S3", "J_2@S2", "J_3@S2", "J_4@S2", "J_5@S4", "J_6@S1", "J_7@S5", "J_8@S3", "J_9@S1"], "textposition": "inside", "x": [20.0, 10.0, 10.0, 20.0, 15.0, 15.0, 10.0, 20.0, 20.0, 10.0], "y": ["Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue", "Dispatching Queue"], "type": "bar", "xaxis": "x2", "yaxis": "y2", "textfont": {"size": 14}}, {"base": [0.0, 0.0, 0.0, 22.0, 27.0, 34.0, 68.0, 69.0, 84.0, 96.0], "hovertemplate": "To Material<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "marker": {"color": "#E6F0FF", "line": {"color": "#4C72B0", "width": 1}, "pattern": {"shape": "\\"}}, "name": "To Material", "orientation": "h", "x": [2.0, 5.0, 2.0, 12.0, 9.0, 9.0, 8.0, 10.0, 14.0, 8.0], "y": ["AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}, {"base": [2.0, 5.0, 2.0, 34.0, 36.0, 53.0, 68.0, 43.0, 76.0, 79.0, 98.0, 104.0], "hovertemplate": "To Station<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "marker": {"color": "#E2E8F0", "line": {"color": "#8A8A8A", "width": 1}, "pattern": {"shape": "/"}}, "name": "To Station", "orientation": "h", "x": [12.0, 12.0, 10.0, 14.0, 4.0, 14.0, 1.0, 11.0, 10.0, 14.0, 12.0, 10.0], "y": ["AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}, {"base": [40.0, 67.0], "hovertemplate": "Waiting<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "marker": {"color": "#CBD5E0", "pattern": {"shape": "."}}, "name": "Waiting", "orientation": "h", "x": [13.0, 1.0], "y": ["AMR2 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}, {"base": [17.0, 12.0, 86.0, 114.0], "hovertemplate": "%{text}<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "insidetextanchor": "middle", "marker": {"color": "#2B6CB0"}, "name": "Type A", "orientation": "h", "text": ["J_1@S3", "J_2@S2", "J_6@S1", "J_9@S1"], "textposition": "inside", "x": [10.0, 10.0, 10.0, 10.0], "y": ["AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}, {"base": [69.0, 54.0], "hovertemplate": "%{text}<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "insidetextanchor": "middle", "marker": {"color": "#DD6B20"}, "name": "Type B", "orientation": "h", "text": ["J_4@S2", "J_5@S4"], "textposition": "inside", "x": [15.0, 15.0], "y": ["AMR2 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}, {"base": [14.0, 48.0, 93.0, 110.0], "hovertemplate": "%{text}<br>start=%{base:.1f}s<br>dur=%{x:.1f}s<extra></extra>", "insidetextanchor": "middle", "marker": {"color": "#2F855A"}, "name": "Type C", "orientation": "h", "text": ["J_0@S4", "J_3@S2", "J_7@S5", "J_8@S3"], "textposition": "inside", "x": [20.0, 20.0, 20.0, 20.0], "y": ["AMR1 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]", "AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]"], "type": "bar", "xaxis": "x3", "yaxis": "y3", "textfont": {"size": 14}}], "layout": {"template": {"data": {"barpolar": [{"marker": {"line": {"color": "white", "width": 0.5}, "pattern": {"fillmode": "overlay", "size": 10, "solidity": 0.2}}, "type": "barpolar"}], "bar": [{"error_x": {"color": "#2a3f5f"}, "error_y": {"color": "#2a3f5f"}, "marker": {"line": {"color": "white", "width": 0.5}, "pattern": {"fillmode": "overlay", "size": 10, "solidity": 0.2}}, "type": "bar"}], "carpet": [{"aaxis": {"endlinecolor": "#2a3f5f", "gridcolor": "#C8D4E3", "linecolor": "#C8D4E3", "minorgridcolor": "#C8D4E3", "startlinecolor": "#2a3f5f"}, "baxis": {"endlinecolor": "#2a3f5f", "gridcolor": "#C8D4E3", "linecolor": "#C8D4E3", "minorgridcolor": "#C8D4E3", "startlinecolor": "#2a3f5f"}, "type": "carpet"}], "choropleth": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "type": "choropleth"}], "contourcarpet": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "type": "contourcarpet"}], "contour": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "colorscale": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "type": "contour"}], "heatmap": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "colorscale": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "type": "heatmap"}], "histogram2dcontour": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "colorscale": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "type": "histogram2dcontour"}], "histogram2d": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "colorscale": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "type": "histogram2d"}], "histogram": [{"marker": {"pattern": {"fillmode": "overlay", "size": 10, "solidity": 0.2}}, "type": "histogram"}], "mesh3d": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "type": "mesh3d"}], "parcoords": [{"line": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "parcoords"}], "pie": [{"automargin": true, "type": "pie"}], "scatter3d": [{"line": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scatter3d"}], "scattercarpet": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scattercarpet"}], "scattergeo": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scattergeo"}], "scattergl": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scattergl"}], "scattermapbox": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scattermapbox"}], "scattermap": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scattermap"}], "scatterpolargl": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scatterpolargl"}], "scatterpolar": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scatterpolar"}], "scatter": [{"fillpattern": {"fillmode": "overlay", "size": 10, "solidity": 0.2}, "type": "scatter"}], "scatterternary": [{"marker": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "type": "scatterternary"}], "surface": [{"colorbar": {"outlinewidth": 0, "ticks": ""}, "colorscale": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "type": "surface"}], "table": [{"cells": {"fill": {"color": "#EBF0F8"}, "line": {"color": "white"}}, "header": {"fill": {"color": "#C8D4E3"}, "line": {"color": "white"}}, "type": "table"}]}, "layout": {"annotationdefaults": {"arrowcolor": "#2a3f5f", "arrowhead": 0, "arrowwidth": 1}, "autotypenumbers": "strict", "coloraxis": {"colorbar": {"outlinewidth": 0, "ticks": ""}}, "colorscale": {"diverging": [[0, "#8e0152"], [0.1, "#c51b7d"], [0.2, "#de77ae"], [0.3, "#f1b6da"], [0.4, "#fde0ef"], [0.5, "#f7f7f7"], [0.6, "#e6f5d0"], [0.7, "#b8e186"], [0.8, "#7fbc41"], [0.9, "#4d9221"], [1, "#276419"]], "sequential": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]], "sequentialminus": [[0.0, "#0d0887"], [0.1111111111111111, "#46039f"], [0.2222222222222222, "#7201a8"], [0.3333333333333333, "#9c179e"], [0.4444444444444444, "#bd3786"], [0.5555555555555556, "#d8576b"], [0.6666666666666666, "#ed7953"], [0.7777777777777778, "#fb9f3a"], [0.8888888888888888, "#fdca26"], [1.0, "#f0f921"]]}, "colorway": ["#636efa", "#EF553B", "#00cc96", "#ab63fa", "#FFA15A", "#19d3f3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"], "font": {"color": "#2a3f5f"}, "geo": {"bgcolor": "white", "lakecolor": "white", "landcolor": "white", "showlakes": true, "showland": true, "subunitcolor": "#C8D4E3"}, "hoverlabel": {"align": "left"}, "hovermode": "closest", "mapbox": {"style": "light"}, "paper_bgcolor": "white", "plot_bgcolor": "white", "polar": {"angularaxis": {"gridcolor": "#EBF0F8", "linecolor": "#EBF0F8", "ticks": ""}, "bgcolor": "white", "radialaxis": {"gridcolor": "#EBF0F8", "linecolor": "#EBF0F8", "ticks": ""}}, "scene": {"xaxis": {"backgroundcolor": "white", "gridcolor": "#DFE8F3", "gridwidth": 2, "linecolor": "#EBF0F8", "showbackground": true, "ticks": "", "zerolinecolor": "#EBF0F8"}, "yaxis": {"backgroundcolor": "white", "gridcolor": "#DFE8F3", "gridwidth": 2, "linecolor": "#EBF0F8", "showbackground": true, "ticks": "", "zerolinecolor": "#EBF0F8"}, "zaxis": {"backgroundcolor": "white", "gridcolor": "#DFE8F3", "gridwidth": 2, "linecolor": "#EBF0F8", "showbackground": true, "ticks": "", "zerolinecolor": "#EBF0F8"}}, "shapedefaults": {"line": {"color": "#2a3f5f"}}, "ternary": {"aaxis": {"gridcolor": "#DFE8F3", "linecolor": "#A2B1C6", "ticks": ""}, "baxis": {"gridcolor": "#DFE8F3", "linecolor": "#A2B1C6", "ticks": ""}, "bgcolor": "white", "caxis": {"gridcolor": "#DFE8F3", "linecolor": "#A2B1C6", "ticks": ""}}, "title": {"x": 0.05}, "xaxis": {"automargin": true, "gridcolor": "#EBF0F8", "linecolor": "#EBF0F8", "ticks": "", "title": {"standoff": 15}, "zerolinecolor": "#EBF0F8", "zerolinewidth": 2}, "yaxis": {"automargin": true, "gridcolor": "#EBF0F8", "linecolor": "#EBF0F8", "ticks": "", "title": {"standoff": 15}, "zerolinecolor": "#EBF0F8", "zerolinewidth": 2}}}, "xaxis": {"anchor": "y", "domain": [0.0, 1.0], "matches": "x3", "showticklabels": false}, "yaxis": {"anchor": "x", "domain": [0.6472, 1.0], "tickfont": {"size": 11}, "title": {"text": "Input Queue"}, "categoryorder": "array", "categoryarray": ["slot 10", "slot 9", "slot 8", "slot 7", "slot 6", "slot 5", "slot 4", "slot 3", "slot 2", "slot 1"], "showticklabels": false}, "xaxis2": {"anchor": "y2", "domain": [0.0, 1.0], "matches": "x3", "showticklabels": false}, "yaxis2": {"anchor": "x2", "domain": [0.3992, 0.5672], "tickfont": {"size": 12}, "categoryorder": "array", "categoryarray": ["Dispatching Queue"]}, "xaxis3": {"anchor": "y3", "domain": [0.0, 1.0], "title": {"text": "Time (s)"}, "tickfont": {"size": 11}, "rangeslider": {"visible": true}}, "yaxis3": {"anchor": "x3", "domain": [0.0, 0.3192], "tickfont": {"size": 12}, "categoryorder": "array", "categoryarray": ["AMR1 [A:0 B:0 C:0]", "AMR2 [A:0 B:0 C:0]", "AMR3 [A:0 B:0 C:0]"]}, "title": {"text": "TEST scenario=0 dt=0.00 jobs=10", "x": 0.01, "y": 0.995, "xanchor": "left", "yanchor": "top"}, "font": {"family": "Segoe UI, Arial", "size": 13}, "legend": {"orientation": "h", "yanchor": "bottom", "y": 1.2, "xanchor": "left", "x": 0.01}, "margin": {"l": 70, "r": 40, "t": 130, "b": 90}, "height": 1250, "barmode": "overlay", "hovermode": "x unified"}};
+    const plot = document.getElementById('plot');
+    const centerSlider = document.getElementById('centerSlider');
+    const windowInput = document.getElementById('windowInput');
+    const centerLabel = document.getElementById('centerLabel');
+    const playBtn = document.getElementById('playBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    let timer = null;
+
+    function clamp(val, min, max) {
+      return Math.max(min, Math.min(max, val));
+    }
+
+    function updateWindow(center, windowSize) {
+      const half = windowSize / 2.0;
+      const left = clamp(center - half, 0.0, 150.00);
+      const right = clamp(center + half, 0.0, 150.00);
+      const line = {type: 'line', x0: center, x1: center, y0: 0, y1: 1, xref: 'x', yref: 'paper', line: {color: '#E53E3E', width: 1}};
+      Plotly.relayout(plot, {
+        'xaxis.range': [left, right],
+        'xaxis2.range': [left, right],
+        'xaxis3.range': [left, right],
+        'shapes': [line]
+      });
+      centerLabel.textContent = `t=${center.toFixed(1)}s`;
+    }
+
+    Plotly.newPlot(plot, fig.data, fig.layout, {responsive: true}).then(() => {
+      updateWindow(0.0, parseFloat(windowInput.value));
+    });
+
+    centerSlider.addEventListener('input', () => {
+      const center = parseFloat(centerSlider.value);
+      const windowSize = parseFloat(windowInput.value);
+      updateWindow(center, windowSize);
+    });
+
+    windowInput.addEventListener('change', () => {
+      const center = parseFloat(centerSlider.value);
+      const windowSize = parseFloat(windowInput.value);
+      updateWindow(center, windowSize);
+    });
+
+    playBtn.addEventListener('click', () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        let next = parseFloat(centerSlider.value) + 5.00;
+        if (next > 150.00) next = 0.0;
+        centerSlider.value = next.toFixed(2);
+        updateWindow(next, parseFloat(windowInput.value));
+      }, 150);
+    });
+
+    pauseBtn.addEventListener('click', () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    });
+  </script>
+</body>
+</html>

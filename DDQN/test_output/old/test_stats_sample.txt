@@ -1,0 +1,7 @@
+RUN|target=test_ddqn.jsonl|mode=each_line|scope=file
+[test_ddqn.jsonl] CASE 000 jobs=25 mk=326.000 mk/job=13.040 mk/proc=0.906
+[test_ddqn.jsonl] CASE 000 route_jsonl=test_output\route_logs3\test_ddqn_case_000_amr_path.jsonl lines=327
+[test_ddqn.jsonl] CASE 001 jobs=25 mk=335.000 mk/job=13.400 mk/proc=0.807
+[test_ddqn.jsonl] CASE 001 route_jsonl=test_output\route_logs3\test_ddqn_case_001_amr_path.jsonl lines=336
+PER_FILE|file=test_ddqn.jsonl|cases=2|mk_avg=330.500|mk_min=326.000|mk_max=335.000
+FILE SUMMARY (test_ddqn.jsonl)|cases=2|total_jobs=50|mk_avg=330.500|mk_std=4.500|mk_min=326.000|mk_max=335.000|mk_job_avg=13.220|mk_proc_avg=0.856

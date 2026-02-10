@@ -1,0 +1,114 @@
+RUN|target=test_case|mode=each_line|scope=folder
+[test_10job.jsonl] CASE 000 jobs=10 mk=144.000 mk/job=14.400 mk/proc=0.960
+[test_10job.jsonl] CASE 000 route_jsonl=test_route_logs\test_10job_case_000_amr_path.jsonl lines=145
+[test_10job.jsonl] CASE 001 jobs=10 mk=145.000 mk/job=14.500 mk/proc=0.935
+[test_10job.jsonl] CASE 001 route_jsonl=test_route_logs\test_10job_case_001_amr_path.jsonl lines=146
+[test_10job.jsonl] CASE 002 jobs=10 mk=166.000 mk/job=16.600 mk/proc=0.897
+[test_10job.jsonl] CASE 002 route_jsonl=test_route_logs\test_10job_case_002_amr_path.jsonl lines=167
+[test_10job.jsonl] CASE 003 jobs=10 mk=134.000 mk/job=13.400 mk/proc=1.031
+[test_10job.jsonl] CASE 003 route_jsonl=test_route_logs\test_10job_case_003_amr_path.jsonl lines=135
+[test_10job.jsonl] CASE 004 jobs=10 mk=140.000 mk/job=14.000 mk/proc=0.933
+[test_10job.jsonl] CASE 004 route_jsonl=test_route_logs\test_10job_case_004_amr_path.jsonl lines=141
+[test_15job.jsonl] CASE 000 jobs=15 mk=201.000 mk/job=13.400 mk/proc=0.893
+[test_15job.jsonl] CASE 000 route_jsonl=test_route_logs\test_15job_case_000_amr_path.jsonl lines=202
+[test_15job.jsonl] CASE 001 jobs=15 mk=196.000 mk/job=13.067 mk/proc=0.871
+[test_15job.jsonl] CASE 001 route_jsonl=test_route_logs\test_15job_case_001_amr_path.jsonl lines=197
+[test_15job.jsonl] CASE 002 jobs=15 mk=188.000 mk/job=12.533 mk/proc=0.917
+[test_15job.jsonl] CASE 002 route_jsonl=test_route_logs\test_15job_case_002_amr_path.jsonl lines=189
+[test_15job.jsonl] CASE 003 jobs=15 mk=219.000 mk/job=14.600 mk/proc=0.912
+[test_15job.jsonl] CASE 003 route_jsonl=test_route_logs\test_15job_case_003_amr_path.jsonl lines=220
+[test_15job.jsonl] CASE 004 jobs=15 mk=200.000 mk/job=13.333 mk/proc=0.816
+[test_15job.jsonl] CASE 004 route_jsonl=test_route_logs\test_15job_case_004_amr_path.jsonl lines=201
+[test_20job.jsonl] CASE 000 jobs=20 mk=265.000 mk/job=13.250 mk/proc=0.964
+[test_20job.jsonl] CASE 000 route_jsonl=test_route_logs\test_20job_case_000_amr_path.jsonl lines=266
+[test_20job.jsonl] CASE 001 jobs=20 mk=278.000 mk/job=13.900 mk/proc=0.855
+[test_20job.jsonl] CASE 001 route_jsonl=test_route_logs\test_20job_case_001_amr_path.jsonl lines=279
+[test_20job.jsonl] CASE 002 jobs=20 mk=272.000 mk/job=13.600 mk/proc=0.892
+[test_20job.jsonl] CASE 002 route_jsonl=test_route_logs\test_20job_case_002_amr_path.jsonl lines=273
+[test_20job.jsonl] CASE 003 jobs=20 mk=274.000 mk/job=13.700 mk/proc=0.870
+[test_20job.jsonl] CASE 003 route_jsonl=test_route_logs\test_20job_case_003_amr_path.jsonl lines=275
+[test_20job.jsonl] CASE 004 jobs=20 mk=251.000 mk/job=12.550 mk/proc=0.866
+[test_20job.jsonl] CASE 004 route_jsonl=test_route_logs\test_20job_case_004_amr_path.jsonl lines=252
+[test_25job.jsonl] CASE 000 jobs=25 mk=327.000 mk/job=13.080 mk/proc=0.908
+[test_25job.jsonl] CASE 000 route_jsonl=test_route_logs\test_25job_case_000_amr_path.jsonl lines=328
+[test_25job.jsonl] CASE 001 jobs=25 mk=356.000 mk/job=14.240 mk/proc=0.858
+[test_25job.jsonl] CASE 001 route_jsonl=test_route_logs\test_25job_case_001_amr_path.jsonl lines=357
+[test_25job.jsonl] CASE 002 jobs=25 mk=345.000 mk/job=13.800 mk/proc=0.908
+[test_25job.jsonl] CASE 002 route_jsonl=test_route_logs\test_25job_case_002_amr_path.jsonl lines=346
+[test_25job.jsonl] CASE 003 jobs=25 mk=322.000 mk/job=12.880 mk/proc=0.836
+[test_25job.jsonl] CASE 003 route_jsonl=test_route_logs\test_25job_case_003_amr_path.jsonl lines=323
+[test_25job.jsonl] CASE 004 jobs=25 mk=332.000 mk/job=13.280 mk/proc=0.922
+[test_25job.jsonl] CASE 004 route_jsonl=test_route_logs\test_25job_case_004_amr_path.jsonl lines=333
+[test_5job.jsonl] CASE 000 jobs=5 mk=77.000 mk/job=15.400 mk/proc=0.906
+[test_5job.jsonl] CASE 000 route_jsonl=test_route_logs\test_5job_case_000_amr_path.jsonl lines=78
+[test_5job.jsonl] CASE 001 jobs=5 mk=91.000 mk/job=18.200 mk/proc=1.213
+[test_5job.jsonl] CASE 001 route_jsonl=test_route_logs\test_5job_case_001_amr_path.jsonl lines=92
+[test_5job.jsonl] CASE 002 jobs=5 mk=76.000 mk/job=15.200 mk/proc=1.169
+[test_5job.jsonl] CASE 002 route_jsonl=test_route_logs\test_5job_case_002_amr_path.jsonl lines=77
+[test_5job.jsonl] CASE 003 jobs=5 mk=76.000 mk/job=15.200 mk/proc=1.086
+[test_5job.jsonl] CASE 003 route_jsonl=test_route_logs\test_5job_case_003_amr_path.jsonl lines=77
+[test_5job.jsonl] CASE 004 jobs=5 mk=73.000 mk/job=14.600 mk/proc=1.043
+[test_5job.jsonl] CASE 004 route_jsonl=test_route_logs\test_5job_case_004_amr_path.jsonl lines=74
+PER_FILE|file=test_10job.jsonl|cases=5|mk_avg=145.800|mk_min=134.000|mk_max=166.000
+PER_FILE|file=test_15job.jsonl|cases=5|mk_avg=200.800|mk_min=188.000|mk_max=219.000
+PER_FILE|file=test_20job.jsonl|cases=5|mk_avg=268.000|mk_min=251.000|mk_max=278.000
+PER_FILE|file=test_25job.jsonl|cases=5|mk_avg=336.400|mk_min=322.000|mk_max=356.000
+PER_FILE|file=test_5job.jsonl|cases=5|mk_avg=78.600|mk_min=73.000|mk_max=91.000
+FOLDER SUMMARY (test_case)|cases=25|total_jobs=375|mk_avg=205.920|mk_std=90.814|mk_min=73.000|mk_max=356.000|mk_job_avg=14.109|mk_proc_avg=0.939
+RUN|target=test_case|mode=each_line|scope=folder
+[test_10job.jsonl] CASE 000 jobs=10 mk=130.000 mk/job=13.000 mk/proc=0.867
+[test_10job.jsonl] CASE 000 route_jsonl=test_route_logs\test_10job_case_000_amr_path.jsonl lines=131
+[test_10job.jsonl] CASE 001 jobs=10 mk=138.000 mk/job=13.800 mk/proc=0.890
+[test_10job.jsonl] CASE 001 route_jsonl=test_route_logs\test_10job_case_001_amr_path.jsonl lines=139
+[test_10job.jsonl] CASE 002 jobs=10 mk=164.000 mk/job=16.400 mk/proc=0.886
+[test_10job.jsonl] CASE 002 route_jsonl=test_route_logs\test_10job_case_002_amr_path.jsonl lines=165
+[test_10job.jsonl] CASE 003 jobs=10 mk=136.000 mk/job=13.600 mk/proc=1.046
+[test_10job.jsonl] CASE 003 route_jsonl=test_route_logs\test_10job_case_003_amr_path.jsonl lines=137
+[test_10job.jsonl] CASE 004 jobs=10 mk=165.000 mk/job=16.500 mk/proc=1.100
+[test_10job.jsonl] CASE 004 route_jsonl=test_route_logs\test_10job_case_004_amr_path.jsonl lines=166
+[test_15job.jsonl] CASE 000 jobs=15 mk=227.000 mk/job=15.133 mk/proc=1.009
+[test_15job.jsonl] CASE 000 route_jsonl=test_route_logs\test_15job_case_000_amr_path.jsonl lines=228
+[test_15job.jsonl] CASE 001 jobs=15 mk=213.000 mk/job=14.200 mk/proc=0.947
+[test_15job.jsonl] CASE 001 route_jsonl=test_route_logs\test_15job_case_001_amr_path.jsonl lines=214
+[test_15job.jsonl] CASE 002 jobs=15 mk=197.000 mk/job=13.133 mk/proc=0.961
+[test_15job.jsonl] CASE 002 route_jsonl=test_route_logs\test_15job_case_002_amr_path.jsonl lines=198
+[test_15job.jsonl] CASE 003 jobs=15 mk=212.000 mk/job=14.133 mk/proc=0.883
+[test_15job.jsonl] CASE 003 route_jsonl=test_route_logs\test_15job_case_003_amr_path.jsonl lines=213
+[test_15job.jsonl] CASE 004 jobs=15 mk=217.000 mk/job=14.467 mk/proc=0.886
+[test_15job.jsonl] CASE 004 route_jsonl=test_route_logs\test_15job_case_004_amr_path.jsonl lines=218
+[test_20job.jsonl] CASE 000 jobs=20 mk=274.000 mk/job=13.700 mk/proc=0.996
+[test_20job.jsonl] CASE 000 route_jsonl=test_route_logs\test_20job_case_000_amr_path.jsonl lines=275
+[test_20job.jsonl] CASE 001 jobs=20 mk=307.000 mk/job=15.350 mk/proc=0.945
+[test_20job.jsonl] CASE 001 route_jsonl=test_route_logs\test_20job_case_001_amr_path.jsonl lines=308
+[test_20job.jsonl] CASE 002 jobs=20 mk=290.000 mk/job=14.500 mk/proc=0.951
+[test_20job.jsonl] CASE 002 route_jsonl=test_route_logs\test_20job_case_002_amr_path.jsonl lines=291
+[test_20job.jsonl] CASE 003 jobs=20 mk=292.000 mk/job=14.600 mk/proc=0.927
+[test_20job.jsonl] CASE 003 route_jsonl=test_route_logs\test_20job_case_003_amr_path.jsonl lines=293
+[test_20job.jsonl] CASE 004 jobs=20 mk=274.000 mk/job=13.700 mk/proc=0.945
+[test_20job.jsonl] CASE 004 route_jsonl=test_route_logs\test_20job_case_004_amr_path.jsonl lines=275
+[test_25job.jsonl] CASE 000 jobs=25 mk=352.000 mk/job=14.080 mk/proc=0.978
+[test_25job.jsonl] CASE 000 route_jsonl=test_route_logs\test_25job_case_000_amr_path.jsonl lines=353
+[test_25job.jsonl] CASE 001 jobs=25 mk=367.000 mk/job=14.680 mk/proc=0.884
+[test_25job.jsonl] CASE 001 route_jsonl=test_route_logs\test_25job_case_001_amr_path.jsonl lines=368
+[test_25job.jsonl] CASE 002 jobs=25 mk=336.000 mk/job=13.440 mk/proc=0.884
+[test_25job.jsonl] CASE 002 route_jsonl=test_route_logs\test_25job_case_002_amr_path.jsonl lines=337
+[test_25job.jsonl] CASE 003 jobs=25 mk=339.000 mk/job=13.560 mk/proc=0.881
+[test_25job.jsonl] CASE 003 route_jsonl=test_route_logs\test_25job_case_003_amr_path.jsonl lines=340
+[test_25job.jsonl] CASE 004 jobs=25 mk=347.000 mk/job=13.880 mk/proc=0.964
+[test_25job.jsonl] CASE 004 route_jsonl=test_route_logs\test_25job_case_004_amr_path.jsonl lines=348
+[test_5job.jsonl] CASE 000 jobs=5 mk=86.000 mk/job=17.200 mk/proc=1.012
+[test_5job.jsonl] CASE 000 route_jsonl=test_route_logs\test_5job_case_000_amr_path.jsonl lines=87
+[test_5job.jsonl] CASE 001 jobs=5 mk=93.000 mk/job=18.600 mk/proc=1.240
+[test_5job.jsonl] CASE 001 route_jsonl=test_route_logs\test_5job_case_001_amr_path.jsonl lines=94
+[test_5job.jsonl] CASE 002 jobs=5 mk=73.000 mk/job=14.600 mk/proc=1.123
+[test_5job.jsonl] CASE 002 route_jsonl=test_route_logs\test_5job_case_002_amr_path.jsonl lines=74
+[test_5job.jsonl] CASE 003 jobs=5 mk=76.000 mk/job=15.200 mk/proc=1.086
+[test_5job.jsonl] CASE 003 route_jsonl=test_route_logs\test_5job_case_003_amr_path.jsonl lines=77
+[test_5job.jsonl] CASE 004 jobs=5 mk=67.000 mk/job=13.400 mk/proc=0.957
+[test_5job.jsonl] CASE 004 route_jsonl=test_route_logs\test_5job_case_004_amr_path.jsonl lines=68
+PER_FILE|file=test_10job.jsonl|cases=5|mk_avg=146.600|mk_min=130.000|mk_max=165.000
+PER_FILE|file=test_15job.jsonl|cases=5|mk_avg=213.200|mk_min=197.000|mk_max=227.000
+PER_FILE|file=test_20job.jsonl|cases=5|mk_avg=287.400|mk_min=274.000|mk_max=307.000
+PER_FILE|file=test_25job.jsonl|cases=5|mk_avg=348.200|mk_min=336.000|mk_max=367.000
+PER_FILE|file=test_5job.jsonl|cases=5|mk_avg=79.000|mk_min=67.000|mk_max=93.000
+FOLDER SUMMARY (test_case)|cases=25|total_jobs=375|mk_avg=214.880|mk_std=96.786|mk_min=67.000|mk_max=367.000|mk_job_avg=14.594|mk_proc_avg=0.970
