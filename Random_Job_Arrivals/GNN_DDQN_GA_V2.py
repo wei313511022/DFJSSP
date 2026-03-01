@@ -44,7 +44,7 @@ CONFIG = {
     
     # Training
     'NUM_EPISODES': 1000,
-    'BATCH_SIZE': 32,      # Increased for GPU efficiency
+    'BATCH_SIZE': 64,      # Increased for GPU efficiency
     'GAMMA': 0.99,
     'LR': 3e-4,
     'FLOW_PENALTY': 0,    # The penalty multiplier for unstarted jobs waiting in the system
