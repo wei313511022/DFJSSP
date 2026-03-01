@@ -1,0 +1,22 @@
+import matplotlib.pyplot as plt
+
+# The data provided
+data = {"episode_id": 0, "jobs": [{"id": 0, "type": "B", "arrival_time": 5.49, "dest_station_id": 2}, {"id": 1, "type": "A", "arrival_time": 7.15, "dest_station_id": 4}, {"id": 2, "type": "B", "arrival_time": 7.88, "dest_station_id": 3}, {"id": 3, "type": "A", "arrival_time": 8.04, "dest_station_id": 5}, {"id": 4, "type": "B", "arrival_time": 10.27, "dest_station_id": 3}, {"id": 5, "type": "A", "arrival_time": 10.88, "dest_station_id": 2}, {"id": 6, "type": "A", "arrival_time": 11.16, "dest_station_id": 2}, {"id": 7, "type": "B", "arrival_time": 11.74, "dest_station_id": 2}, {"id": 8, "type": "A", "arrival_time": 14.55, "dest_station_id": 1}, {"id": 9, "type": "B", "arrival_time": 17.73, "dest_station_id": 3}, {"id": 10, "type": "C", "arrival_time": 23.38, "dest_station_id": 3}, {"id": 11, "type": "C", "arrival_time": 24.24, "dest_station_id": 4}, {"id": 12, "type": "C", "arrival_time": 25.94, "dest_station_id": 3}, {"id": 13, "type": "B", "arrival_time": 26.33, "dest_station_id": 4}, {"id": 14, "type": "A", "arrival_time": 28.12, "dest_station_id": 5}, {"id": 15, "type": "A", "arrival_time": 34.78, "dest_station_id": 3}, {"id": 16, "type": "A", "arrival_time": 35.79, "dest_station_id": 2}, {"id": 17, "type": "C", "arrival_time": 37.69, "dest_station_id": 5}, {"id": 18, "type": "B", "arrival_time": 37.73, "dest_station_id": 3}, {"id": 19, "type": "A", "arrival_time": 38.07, "dest_station_id": 2}, {"id": 20, "type": "B", "arrival_time": 38.17, "dest_station_id": 1}, {"id": 21, "type": "C", "arrival_time": 38.21, "dest_station_id": 2}, {"id": 22, "type": "A", "arrival_time": 40.63, "dest_station_id": 1}, {"id": 23, "type": "C", "arrival_time": 45.15, "dest_station_id": 3}, {"id": 24, "type": "A", "arrival_time": 51.87, "dest_station_id": 5}, {"id": 25, "type": "A", "arrival_time": 51.99, "dest_station_id": 1}, {"id": 26, "type": "A", "arrival_time": 52.68, "dest_station_id": 3}, {"id": 27, "type": "C", "arrival_time": 52.71, "dest_station_id": 4}, {"id": 28, "type": "B", "arrival_time": 55.01, "dest_station_id": 4}, {"id": 29, "type": "B", "arrival_time": 55.95, "dest_station_id": 1}, {"id": 30, "type": "B", "arrival_time": 56.74, "dest_station_id": 5}, {"id": 31, "type": "A", "arrival_time": 57.14, "dest_station_id": 2}, {"id": 32, "type": "C", "arrival_time": 57.16, "dest_station_id": 5}, {"id": 33, "type": "A", "arrival_time": 57.77, "dest_station_id": 1}, {"id": 34, "type": "C", "arrival_time": 64.97, "dest_station_id": 2}, {"id": 35, "type": "C", "arrival_time": 65.63, "dest_station_id": 5}, {"id": 36, "type": "B", "arrival_time": 68.69, "dest_station_id": 5}, {"id": 37, "type": "B", "arrival_time": 71.5, "dest_station_id": 3}, {"id": 38, "type": "B", "arrival_time": 72.76, "dest_station_id": 2}, {"id": 39, "type": "B", "arrival_time": 74.25, "dest_station_id": 4}, {"id": 40, "type": "B", "arrival_time": 75.55, "dest_station_id": 2}, {"id": 41, "type": "A", "arrival_time": 78.19, "dest_station_id": 4}, {"id": 42, "type": "B", "arrival_time": 78.67, "dest_station_id": 5}, {"id": 43, "type": "B", "arrival_time": 79.38, "dest_station_id": 5}, {"id": 44, "type": "A", "arrival_time": 81.2, "dest_station_id": 4}, {"id": 45, "type": "B", "arrival_time": 88.12, "dest_station_id": 4}, {"id": 46, "type": "B", "arrival_time": 88.84, "dest_station_id": 1}, {"id": 47, "type": "B", "arrival_time": 91.5, "dest_station_id": 2}, {"id": 48, "type": "A", "arrival_time": 92.81, "dest_station_id": 3}, {"id": 49, "type": "B", "arrival_time": 94.38, "dest_station_id": 1}, {"id": 50, "type": "B", "arrival_time": 95.42, "dest_station_id": 2}, {"id": 51, "type": "A", "arrival_time": 95.44, "dest_station_id": 5}, {"id": 52, "type": "C", "arrival_time": 97.69, "dest_station_id": 4}]}
+
+# Extracting info
+arrivals = [j['arrival_time'] for j in data['jobs']]
+types = [j['type'] for j in data['jobs']]
+colors = {'A': 'tab:blue', 'B': 'tab:orange', 'C': 'tab:green'}
+
+plt.figure(figsize=(12, 4))
+for t in ['A', 'B', 'C']:
+    t_arrivals = [j['arrival_time'] for j in data['jobs'] if j['type'] == t]
+    plt.scatter(t_arrivals, [t]*len(t_arrivals), c=colors[t], label=f'Type {t}', s=100, edgecolors='black', alpha=0.7)
+
+plt.title(f"Job Arrival Timeline (Episode {data['episode_id']})")
+plt.xlabel("Time Units")
+plt.ylabel("Job Type")
+plt.grid(axis='x', linestyle='--', alpha=0.6)
+plt.legend()
+plt.tight_layout()
+plt.show()
