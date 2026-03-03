@@ -106,7 +106,7 @@ def solve_vrp_from_jobs(
     if time_limit is not None:
         model.Params.TimeLimit = float(time_limit)
     model.Params.MIPGap = 0.0
-    model.Params.OutputFlag = 0
+    model.Params.OutputFlag = 1
     # Helpful when you care about proving optimality (may take longer to find first feasible).
     try:
         model.Params.MIPFocus = 2
@@ -756,6 +756,18 @@ def process_event_line_visual(line: str, ax, out_f):
     # Store makespan for display
     visualization.current_makespan = res.get("makespan", 0.0)
     visualization.total_solve_time += float(res.get("solve_time", 0.0))
+
+    # Print performance summary (per event)
+    try:
+        _solve_time = float(res.get("solve_time", 0.0))
+        _makespan = float(res.get("makespan", 0.0))
+        print(
+            f"[MILP] dispatch_time={dispatch_time:.3f} "
+            f"solve_time={_solve_time:.3f}s makespan={_makespan:.3f} "
+            f"cumulative_solve_time={float(visualization.total_solve_time):.3f}s"
+        )
+    except Exception:
+        pass
 
     # Flatten MILP result jobs by pick_time then jid
     all_jobs = []

@@ -8,6 +8,14 @@
 
 from __future__ import annotations
 
+# Allow running this script directly from the subfolder (so imports from project root work).
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+	sys.path.insert(0, str(_PROJECT_ROOT))
+
 import json
 import os
 import random
@@ -47,6 +55,12 @@ from calcu_dist import make_calculate_distance
 
 
 calculate_distance = make_calculate_distance(GRID_SIZE, BARRIER_NODES)
+
+
+# Refill policy: do not wait until inventory hits 0.
+# Trigger a material pickup when onboard qty for the required type is <= this threshold.
+# Set env var REFILL_TRIGGER_QTY=0 to restore the legacy behavior.
+REFILL_TRIGGER_QTY = int(os.environ.get("REFILL_TRIGGER_QTY", "1"))
 
 
 # ===================== DPR(a1) DISPATCHING LOGIC =====================
@@ -133,8 +147,8 @@ def _eligible_amrs_for_op(op: Operation) -> List[int]:
 
 
 def _amr_is_material_compatible(amr: AMRState, op: Operation) -> bool:
-	# With multi-type inventory, any AMR can serve any type; refill happens only when
-	# that type's onboard qty is 0.
+	# With multi-type inventory, any AMR can serve any type; refill is triggered when
+	# that type's onboard qty is low (<= REFILL_TRIGGER_QTY).
 	return True
 
 
@@ -178,7 +192,7 @@ def _estimate_required_station_wait(
 	op_ready_time = float(tsk.release_time)
 
 	onboard_qty = int(amr.inv.get(t, 0))
-	needs_refill = onboard_qty <= 0
+	needs_refill = onboard_qty <= REFILL_TRIGGER_QTY
 	if needs_refill:
 		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
 		to_pick_travel = float(calculate_distance(prev_node, pickup_node))
@@ -258,7 +272,7 @@ def _estimate_completion_time(
 	op_ready_time = float(tsk.release_time)
 
 	onboard_qty = int(amr.inv.get(t, 0))
-	needs_refill = onboard_qty <= 0
+	needs_refill = onboard_qty <= REFILL_TRIGGER_QTY
 	if needs_refill:
 		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
 		pick_dist = float(calculate_distance(prev_node, pickup_node))
@@ -326,9 +340,10 @@ def _schedule_one_operation(
 	# No precedence among operations inside a job.
 	op_ready_time = float(js.release_time)
 
-	# Inventory is tracked per type; each type max 3; refill only when that type is 0.
+	# Inventory is tracked per type; each type max MATERIAL_PICK_QTY.
+	# Refill is triggered when onboard qty for this type is <= REFILL_TRIGGER_QTY.
 	onboard_qty = int(amr.inv.get(t, 0))
-	needs_refill = onboard_qty <= 0
+	needs_refill = onboard_qty <= REFILL_TRIGGER_QTY
 	if needs_refill:
 		pickup_node = int(TYPE_TO_MATERIAL_NODE[t])
 		to_pick_travel = float(calculate_distance(prev_node, pickup_node))
@@ -405,7 +420,7 @@ def dispatch_a1_event(
 	"""Run dispatch for one batch; returns scheduled operation records.
 
 	NOTE: AMR inventory persists across events (each task consumes 1 unit of its type;
-	replenish that type to 3 only when its onboard qty reaches 0).
+	replenish that type to 3 when its onboard qty is <= REFILL_TRIGGER_QTY).
 	"""
 	if seed is not None:
 		random.seed(int(seed))
