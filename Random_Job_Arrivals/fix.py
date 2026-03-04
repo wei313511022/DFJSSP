@@ -71,7 +71,7 @@ def run_comparison():
     
     # Configuration
     PERIODS = [1.0, 5.0, 10.0, 20.0, 50.0]
-    TEST_EPISODES = 50
+    TEST_EPISODES = len(env.episodes)
     CSV_FILENAME = "fix_period_comparison.csv"
     PLOT_FILENAME = "fix_period_comparison_flow.png"
     

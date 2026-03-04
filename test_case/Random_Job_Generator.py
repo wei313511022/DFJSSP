@@ -13,9 +13,9 @@ STATION_COUNT = 5
 
 # Job definitions
 JOB_TYPES = {
-    "A": {"time": 10},
-    "B": {"time": 15},
-    "C": {"time": 20},
+    "A": {"time": 5},
+    "B": {"time": 10},
+    "C": {"time": 25},
 }
 JOB_TYPE_KEYS = list(JOB_TYPES.keys())
 

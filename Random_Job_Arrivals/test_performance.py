@@ -7,7 +7,7 @@ import csv
 from GNN_DDQN_GA_V2 import GridEnv, SchedulerAgent, CONFIG
 
 
-PATH = "gnn_ddqn_model_v3.pth"
+PATH = "gnn_ddqn_model_v4/gnn_ddqn_model_v4_ep100.pth"
 CONFIG['DATASET_PATH'] = "test_dataset.jsonl"
 
 CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -218,7 +218,7 @@ def run_test():
     env = GridEnv()
     agent = load_agent(PATH)
 
-    TEST_EPISODES = len(env.episodes)
+    TEST_EPISODES = 50
     FIX_PERIOD = 1.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---

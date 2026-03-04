@@ -4,9 +4,9 @@ import math
 
 # --- Configuration ---
 NUM_EPISODES = 100         # Total training episodes
-EPISODE_DURATION = 100.0    # Duration of one episode (sim-seconds)
+EPISODE_DURATION = 200.0    # Duration of one episode (sim-seconds)
 MEAN_ARRIVAL_TIME = 2.0    # Average seconds between jobs (Poisson Lambda)
-OUTPUT_FILE = "training_dataset.json"
+OUTPUT_FILE = "test_dataset.jsonl"
 
 # --- Domain Constants ---
 JOB_TYPES = ["A", "B", "C"]
@@ -55,7 +55,7 @@ def main():
     print(f"Generating {NUM_EPISODES} episodes...")
     
     # Use 'w' to overwrite/create the file
-    with open("training_dataset.jsonl", "w") as f: 
+    with open(OUTPUT_FILE, "w") as f: 
         for i in range(NUM_EPISODES):
             scenario = generate_episode(i)
             
@@ -65,7 +65,7 @@ def main():
             if (i+1) % 100 == 0:
                 print(f"Generated {i+1} episodes...")
 
-    print(f"\nSaved to training_dataset.jsonl")
+    print(f"\nSaved to {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()
