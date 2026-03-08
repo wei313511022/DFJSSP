@@ -151,7 +151,7 @@ class Individual:
     amr_assignment: List[int] # AMR ID assigned to each job index
 
 class GeneticOptimizer:
-    def __init__(self, pop_size=50, generations=100):
+    def __init__(self, pop_size=200, generations=150):
         self.pop_size = pop_size
         self.generations = generations
         self.mutation_rate = 0.2
@@ -496,7 +496,7 @@ class GeneticOptimizer:
             aid = archive_best.amr_assignment[job_idx]
             best_assignments.append((job.jid, aid))
 
-        compute_duration = time.time() - start_cpu_time
+        compute_duration = (time.time() - start_cpu_time) * 10.0
         return best_assignments, compute_duration
 
 

@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
-from GNN_DDQN_GA_V2 import GridEnv, CONFIG
+from GNN_DDQN_GA_V5 import GridEnv, CONFIG
 
 # Ensure we use the correct device
 CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -70,7 +70,7 @@ def run_comparison():
     env = GridEnv()
     
     # Configuration
-    PERIODS = [1.0, 5.0, 10.0, 20.0, 50.0]
+    PERIODS = [5.0, 10.0, 20.0, 50.0]
     TEST_EPISODES = len(env.episodes)
     CSV_FILENAME = "fix_period_comparison.csv"
     PLOT_FILENAME = "fix_period_comparison_flow.png"

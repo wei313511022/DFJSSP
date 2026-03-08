@@ -32,7 +32,7 @@ from typing import Optional
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'DATASET_PATH': 'training_dataset.jsonl',
-    'SAVE_PATH': 'gnn_ddqn_model_v3.pth',
+    'SAVE_PATH': 'gnn_ddqn_model_v2/gnn_ddqn_model_v2.pth',
     
     # Physics
     'GRID_WIDTH': 10,
@@ -300,7 +300,7 @@ class GeneticOptimizer:
 
             pop = new_pop[:self.pop_size]
 
-        compute_duration = (time.time() - start_cpu_time)  # CuDA 上的 GA 計算時間通常在幾十到一兩百毫秒之間，乘以 100 是為了放大差異，讓 reward shaping 更敏感
+        compute_duration = (time.time() - start_cpu_time) * 100  # CuDA 上的 GA 計算時間通常在幾十到一兩百毫秒之間，乘以 100 是為了放大差異，讓 reward shaping 更敏感
         return best_chrom, compute_duration
 
 
@@ -858,7 +858,7 @@ def main():
             print(f"Ep {ep} | Reward: {ep_rew:.1f} | Avg Loss: {avg_loss:.4f} | Eps: {eps:.2f}")
 
         if ep % 100 == 0:
-            ckpt_path = f"gnn_ddqn_model_v3_ep{ep}.pth"
+            ckpt_path = f"gnn_ddqn_model_v2/gnn_ddqn_model_v2_ep{ep}.pth"
             torch.save(agent.state_dict(), ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 

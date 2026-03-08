@@ -62,9 +62,10 @@ CONFIG = {
     
     # GA Hyperparameters
     'GA_POP_SIZE': 50,       # Increased from 50
-    'GA_GENERATIONS': 100,    # Increased from 100
+    'GA_GENERATIONS': 50,    # Increased from 100
     'GA_ROUTING_ITERS': 500,
-    'GA_COLLISION_ITERS': 5,
+    'GA_COLLISION_ITERS': 1,
+    'GA_ROUTING_MAX_DEPTH': 100
 }
 
 # ==========================================
@@ -190,7 +191,7 @@ def find_dynamic_path(start: Tuple[int, int], end: Tuple[int, int], start_time: 
     heapq.heappush(open_set, (heuristic(start, end), 0, start, t_start))
     came_from = {}
     g_score = {(start, t_start): 0}
-    MAX_DEPTH = 100
+    MAX_DEPTH = CONFIG['GA_ROUTING_MAX_DEPTH']
     
     while open_set:
         _, g, current, t = heapq.heappop(open_set)

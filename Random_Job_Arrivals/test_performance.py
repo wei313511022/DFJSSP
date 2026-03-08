@@ -4,13 +4,13 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
-from GNN_DDQN_GA_V2 import GridEnv, SchedulerAgent, CONFIG
+import argparse
+import importlib
+import sys
 
-
-PATH = "gnn_ddqn_model_v4/gnn_ddqn_model_v4_ep100.pth"
-CONFIG['DATASET_PATH'] = "test_dataset.jsonl"
-
-CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+GridEnv = None
+SchedulerAgent = None
+CONFIG = None
 
 def snapshot_env(env):
     """Return hashable snapshots for diff."""
@@ -214,15 +214,15 @@ def run_one_episode_fix(env, period=5.0):
     done_cnt, flow, mk = episode_metrics(env)
     return done_cnt, flow, mk, total_ga
 
-def run_test():
+def run_test(model_path, output_csv):
     env = GridEnv()
-    agent = load_agent(PATH)
+    agent = load_agent(model_path)
 
-    TEST_EPISODES = 50
+    TEST_EPISODES = len(env.episodes)
     FIX_PERIOD = 1.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
-    csv_filename = "benchmark_results.csv"
+    csv_filename = output_csv
     csv_file = open(csv_filename, "w", newline="")
     writer = csv.writer(csv_file)
     writer.writerow(["Episode", "AI_Done", "Fix_Done", "AI_Flow", "Fix_Flow", "AI_Makespan", "Fix_Makespan", "AI_GA_Time", "Fix_GA_Time", "Winner"])
@@ -291,14 +291,17 @@ def run_test():
     plt.xlabel("Episode")
     plt.ylabel("Seconds")
     plt.legend()
-    plt.savefig("benchmark_results.png")
+    
+    base_name = os.path.splitext(output_csv)[0]
+    plot_filename = f"{base_name}.png"
+    plt.savefig(plot_filename)
     plt.show()
 
-    print("\nResults saved to benchmark_results.png")
+    print(f"\nResults saved to {plot_filename}")
     print(f"Episode data saved to {csv_filename}")
     
     # Summary Table
-    summary_filename = "benchmark_summary.csv"
+    summary_filename = f"{base_name}_summary.csv"
     summary_file = open(summary_filename, "w", newline="")
     summary_writer = csv.writer(summary_file)
     summary_writer.writerow(["Metric", "AI Average", "Fix Average", "Diff (%)"])
@@ -323,4 +326,22 @@ def run_test():
     print(f"Summary table saved to {summary_filename}")
 
 if __name__ == "__main__":
-    run_test()
+    parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
+    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v4/gnn_ddqn_model_v300.pth", help="Path to the model file")
+    parser.add_argument("--output", type=str, default="gnn_ddqn_model_v5/benchmark_results.csv", help="Path to the output CSV file")
+    parser.add_argument("--module", type=str, default="GNN_DDQN_GA_V5", help="Module to import GridEnv and SchedulerAgent from")
+    args = parser.parse_args()
+
+    try:
+        mod = importlib.import_module(args.module)
+        GridEnv = mod.GridEnv
+        SchedulerAgent = mod.SchedulerAgent
+        CONFIG = mod.CONFIG
+    except ImportError as e:
+        print(f"Error importing module {args.module}: {e}")
+        sys.exit(1)
+
+    CONFIG['DATASET_PATH'] = "test_dataset.jsonl"
+    CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    run_test(args.model, args.output)

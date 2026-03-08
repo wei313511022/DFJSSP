@@ -42,12 +42,16 @@ DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 25        
-POPULATION_SIZE = 50    # number of candidate solutions
-GENERATIONS = 100       
+POPULATION_SIZE = 200    # number of candidate solutions
+GENERATIONS = 150       
 MUTATION_RATE = 0.2     
 STAGNATION_LIMIT = 40   # number of convergence iterations 
-routing_iters = 500
-collision_routing_iters = 5
+routing_iters = 1000 
+collision_routing_iters = 20
+
+# MAX_DEPTH limits the Space-Time A* search horizon (moves + waits).
+# It prevents infinite searches in highly congested scenarios.
+MAX_DEPTH = 100
 
 @dataclass(frozen=True)
 class Job:
@@ -154,7 +158,6 @@ def find_dynamic_path(start: Tuple[int, int], end: Tuple[int, int], start_time: 
     
     came_from = {} 
     g_score = {(start, t_start): 0}
-    MAX_DEPTH = 100 # Prevent infinite waiting
     
     while open_set:
         _, g, current, t = heapq.heappop(open_set)
@@ -318,6 +321,10 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         else:
             travel_path = shortest_path(current_position[amr], STATIONS[job.station])
         travel_time = int(len(travel_path) - 1)
+        # Penalize if pathfinding failed (returned [start] but we aren't at destination)
+        if travel_time == 0 and current_position[amr] != STATIONS[job.station]:
+            travel_time = MAX_DEPTH # Heavy penalty for "teleporting"
+
         travel_end = travel_start + travel_time
         if check_collision:
             # Reserve path
@@ -573,7 +580,7 @@ def evolve(jobs: List[Job]) -> Tuple[Individual, List[Tuple]]:
 
         population = new_generation
 
-    archive_best = local_improve(archive_best, jobs)
+    archive_best = local_improve(archive_best, jobs, max_iters=routing_iters)
     
     if collision_routing_iters > 0:
         archive_best = local_improve(archive_best, jobs, max_iters=collision_routing_iters, check_collision=True)
