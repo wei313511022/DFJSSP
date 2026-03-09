@@ -60,7 +60,7 @@ def run_test_suite():
                         solve_dur = time.perf_counter() - start_time
                         
                         # Calculate the final makespan using the collision-aware decoder
-                        availability, _, _, _ = ga.decode_schedule(best_individual, jobs, need_log=False, check_collision=True)
+                        availability, _, _, _, _ = ga.decode_schedule(best_individual, jobs, need_log=False, check_collision=True)
                         makespan = max(availability.values()) if availability else 0.0
 
                         total_makespan += makespan

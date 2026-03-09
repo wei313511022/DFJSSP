@@ -34,7 +34,7 @@ GRID_MIN_X = min(p[0] for p in _GRID_POINTS)
 GRID_MAX_X = max(p[0] for p in _GRID_POINTS)
 GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
-BASES = list(AMR_STARTS.values())
+BASES = [(p[0] + 2, p[1]) for p in AMR_STARTS.values()] # Parking spots are 2 grids to the right
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
 SUPPLY_LOCATIONS = {"A": AMR_STARTS["AMR1"], "B": AMR_STARTS["AMR2"], "C": AMR_STARTS["AMR3"]}
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
@@ -186,6 +186,9 @@ def find_dynamic_path(start: Tuple[int, int], end: Tuple[int, int], start_time: 
             # Check 1: Reserved by moving AMR
             if (neighbor, next_t) in reservations: continue
             
+            # Check 1.5: Prevent edge collisions (swapping)
+            if neighbor != current and (neighbor, t) in reservations: continue
+            
             # Check 2: Occupied by idle AMR
             collision_idle = False
             for other_amr, (pos, free_t) in amr_states.items():
@@ -266,7 +269,7 @@ def nearest_base_to_station(station: str) -> Tuple[int, int]:
     target = STATIONS[station]
     return min(BASES, key=lambda base: grid_distance(base, target))
 
-def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]]]:
+def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]], int]:
     job_map = {job.idx: job for job in jobs} # get job information
     timelines: List[Tuple] = []
     availability = {amr: 0.0 for amr in AMR_STARTS} # amr availability time
@@ -282,6 +285,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
     station_available = {station: 0.0 for station in STATIONS} # station availability time
     order = individual.order
     queue_infos: List[Tuple[int, float]] = []
+    invalid_jobs_count = 0
 
     for pos, job_idx in enumerate(order):
         job = job_map[job_idx]
@@ -324,6 +328,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         # Penalize if pathfinding failed (returned [start] but we aren't at destination)
         if travel_time == 0 and current_position[amr] != STATIONS[job.station]:
             travel_time = MAX_DEPTH # Heavy penalty for "teleporting"
+            invalid_jobs_count += 1
 
         travel_end = travel_start + travel_time
         if check_collision:
@@ -354,49 +359,72 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
             
         inventory[amr][material] -= 1
         station_available[job.station] = process_end # Occupy station
-        # Look-ahead Return Logic (OPTIMIZED)
-        # Check if we have a next job
+        
+        # Look-ahead Return Logic: Decide what to do after the job is done.
         next_job = get_next_job_for_amr(amr, pos, order, individual.amr_assignment, jobs)
         should_return_to_base = True
         if next_job:
             if inventory[amr][next_job.type_] > 0: # have inventory for next job
                 should_return_to_base = False
         else:
-            # If no future jobs, we might stay at workstation instead of returning to base.
-            should_return_to_base = False 
+            # No future jobs for this AMR, so it should return to its home base.
+            should_return_to_base = True
 
         return_start = process_end
-        if next_job and should_return_to_base:
-        # If you're going back to base, go back to the base that's "most advantageous for your next job."
-            next_base = nearest_base_to_station(next_job.station)
+        if should_return_to_base:
+            # Determine return destination: strategic base for next job, or home base if no next job.
+            if next_job:
+                next_base = nearest_base_to_station(next_job.station)
+                if check_collision:
+                    # Find nearest base that is NOT occupied by another AMR
+                    target = STATIONS[next_job.station]
+                    candidates = sorted(BASES, key=lambda b: grid_distance(b, target))
+                    next_base = candidates[0]
+                    for base in candidates:
+                        is_occupied = False
+                        for other_amr, (pos, _) in amr_states.items():
+                            if other_amr != amr and pos == base:
+                                is_occupied = True
+                                break
+                        if not is_occupied:
+                            next_base = base
+                            break
+                else:
+                    next_base = nearest_base_to_station(next_job.station)
+            else:
+                # Return to parking spot (2 grids right of base)
+                base_pos = AMR_STARTS[amr]
+                next_base = (base_pos[0] + 2, base_pos[1])
+
             if check_collision:
                 return_path = find_dynamic_path(STATIONS[job.station], next_base, return_start, reservations, amr_states, amr)
             else:
                 return_path = shortest_path(STATIONS[job.station], next_base)
             return_time = int(len(return_path) - 1)
             return_end = return_start + return_time
+
             if check_collision:
-                # Reserve path
                 for t_offset, pt in enumerate(return_path):
                     reservations.add((pt, int(return_start) + t_offset))
                 amr_states[amr] = (next_base, return_end)
                 
             if need_log:
-                timelines.append((amr, return_start, return_end, "return", f"Return {return_time}s"))
+                label = f"Return Home {return_time}s" if not next_job else f"Return {return_time}s"
+                timelines.append((amr, return_start, return_end, "return", label))
             availability[amr] = return_end
             current_position[amr] = next_base
             if need_log: _extend_path_log(path_logs, amr, return_path)
         else:
-            # Stay at current station
+            # Stay at current station (only happens if next_job exists and we have inventory)
             availability[amr] = return_start
             current_position[amr] = STATIONS[job.station]
             if check_collision:
                 amr_states[amr] = (STATIONS[job.station], return_start)
 
-    return availability, timelines, queue_infos, path_logs
+    return availability, timelines, queue_infos, path_logs, invalid_jobs_count
 
 def fitness(individual: Individual, jobs: List[Job], check_collision: bool = False) -> Tuple[float, List[Tuple]]:
-    availability, timeline, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=check_collision)
+    availability, timeline, _, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=check_collision)
     makespan = max(availability.values())
     #sum of all AMR finish time
     total_active_time = sum(availability.values())
@@ -450,7 +478,7 @@ def order_crossover(parent_a: Individual, parent_b: Individual, jobs: List[Job])
 
 # Moves a job from the busiest AMR to the idlest AMR.
 def smart_load_balance_mutate(individual: Individual, jobs: List[Job]):
-    availability, _, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=False) 
+    availability, _, _, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=False) 
     busiest_amr = max(availability, key=availability.get) # find the busiest amr
     idlest_amr = min(availability, key=availability.get)  # find the idlest amr
     if busiest_amr == idlest_amr: return
@@ -491,7 +519,7 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
     current = Individual(order=list(individual.order), amr_assignment=list(individual.amr_assignment))
     best_score, _ = fitness(current, jobs, check_collision=check_collision) # Current best fitness
     job_count = len(current.order)
-    availability, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
+    availability, _, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
     critical_amr = max(availability, key=availability.get) # AMR with the longest makespan
     for _ in range(max_iters):
         # Each time, randomly select two job_i and job_j and try to swap them.One of them needs to belong to the critical AMR.
@@ -509,7 +537,7 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
                 current = neighbor
                 best_score = score
                 improved = True
-                availability, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
+                availability, _, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
                 critical_amr = max(availability, key=availability.get)
         if not improved:
             # Find consecutive blocks with the same AMR and type in the current order.Randomly select one block.Move the entire block to another location.
@@ -737,9 +765,10 @@ def make_jobs() -> List[Job]:
         jobs.append(Job(idx=idx, type_=type_, duration=TYPE_DURATION[type_], station=station))
     return jobs
 def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None) -> Tuple[float, float]:
-    availability, decoded_timeline, queue_infos, path_logs = decode_schedule(individual, jobs, need_log=False, check_collision=True)
+    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule(individual, jobs, need_log=False, check_collision=True)
     makespan = max(availability.values())
     print(f"Optimal Makespan Found: {makespan:.2f}s")
+    print(f"Invalid Jobs Count: {invalid_count}")
     if solve_time is not None:
         print(f"Computation Time: {solve_time:.4f}s")
     # plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time)
@@ -750,7 +779,7 @@ if __name__ == "__main__":
     dispatch_events = load_dispatch_events()
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
     
-    output_filename = "summary_results.csv"
+    output_filename = "GA_summary_results.csv"
     results_data = []
 
     if dispatch_events:
