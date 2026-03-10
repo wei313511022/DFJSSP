@@ -38,10 +38,10 @@ BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
 SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_20.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
-JOB_COUNT = 25        
+JOB_COUNT = 60        
 POPULATION_SIZE = 200    # number of candidate solutions
 GENERATIONS = 150       
 MUTATION_RATE = 0.2     

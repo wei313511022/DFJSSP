@@ -2,6 +2,7 @@ import torch
 import torch.optim as optim
 import time
 import numpy as np
+import random
 
 # Import from the GNN script
 from GNN import SchedulerGNN, solve_with_gnn
@@ -32,7 +33,7 @@ def train(args):
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     # Track the moving average of the makespan to use as a baseline for REINFORCE
-    baseline_makespan = None
+    baselines = {}
     alpha = 0.1 # Exponential moving average rate
     
     print("Starting REINFORCE training...")
@@ -46,10 +47,12 @@ def train(args):
         
         # We will train on random dispatch events
         for b in range(batch_size):
+            scenario_id = "random"
             # Generate a new random job scenario or pick from dispatch events
             if dispatch_events:
-                import random
-                jobs = random.choice(dispatch_events)["jobs"]
+                event = random.choice(dispatch_events)
+                jobs = event["jobs"]
+                scenario_id = event["index"]
             else:
                 jobs = make_jobs()
             
@@ -65,11 +68,11 @@ def train(args):
             # --- Policy Gradient Update ---
             
             # Initialize baseline
-            if baseline_makespan is None:
-                baseline_makespan = makespan
+            if scenario_id not in baselines:
+                baselines[scenario_id] = makespan
                 
             # Reward: Positive if we beat the baseline makespan, negative if we did worse
-            reward = baseline_makespan - makespan
+            reward = baselines[scenario_id] - makespan
             
             # Loss = -log_prob * reward (We want to maximize reward, so minimize -reward)
             loss = -total_log_prob * reward
@@ -78,16 +81,17 @@ def train(args):
             loss.backward()
             epoch_loss += loss.item()
             
+            # Update the moving average baseline for this scenario
+            baselines[scenario_id] = (1 - alpha) * baselines[scenario_id] + (alpha * makespan)
+            
         # Update weights based on the batch gradients
         optimizer.step()
         
-        # Update the moving average baseline
         avg_batch_makespan = sum(batch_makespans) / batch_size
-        baseline_makespan = (1 - alpha) * baseline_makespan + (alpha * avg_batch_makespan)
         
         # Logging
         if epoch % 1 == 0:
-            print(f"Epoch [{epoch}/{num_epochs}] | Avg Makespan: {avg_batch_makespan:.2f} | Baseline: {baseline_makespan:.2f} | Total Loss: {epoch_loss:.4f}")
+            print(f"Epoch [{epoch}/{num_epochs}] | Avg Makespan: {avg_batch_makespan:.2f} | Total Loss: {epoch_loss:.4f}")
             
         # Optional: Save best model
         if avg_batch_makespan < best_makespan:
