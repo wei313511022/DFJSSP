@@ -1186,7 +1186,9 @@ def main():
                     if state[1][0][0] == 0.0: 
                         s_mask = torch.zeros((1, s_job.size(1), 1), device=CONFIG['DEVICE'])
 
+                    t_start = time.perf_counter()
                     q = agent(s_amr, s_job, s_q, s_mask)  # [1,2]
+                    print(f"GNN+DDQN Inference Time: {(time.perf_counter() - t_start) * 1000:.4f} ms")
 
                     # action mask: invalid -> -inf
                     if mask[1] < 0.5:

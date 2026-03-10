@@ -327,7 +327,7 @@ def run_test(model_path, output_csv):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
-    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v4/gnn_ddqn_model_v300.pth", help="Path to the model file")
+    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v3/gnn_ddqn_model_v3.pth", help="Path to the model file")
     parser.add_argument("--output", type=str, default="gnn_ddqn_model_v5/benchmark_results.csv", help="Path to the output CSV file")
     parser.add_argument("--module", type=str, default="GNN_DDQN_GA_V5", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()

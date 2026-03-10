@@ -14,9 +14,9 @@ from functools import lru_cache
 
 # Constants Setup
 AMR_STARTS = {
-    "AMR1": (0, 7),
-    "AMR2": (0, 4),
-    "AMR3": (0, 1),
+    "AMR1": (2, 7),
+    "AMR2": (2, 4),
+    "AMR3": (2, 1),
 }
 AMR_KEYS = list(AMR_STARTS.keys())
 STATIONS = {
@@ -29,14 +29,14 @@ STATIONS = {
 OBSTACLES = {
     (6,8),(6,9),(6,6),(6,5),(6,4),(6,2),(6,1),(6,0)
 }
-_GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES)
+_GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES) + [(0, 7), (0, 4), (0, 1)]
 GRID_MIN_X = min(p[0] for p in _GRID_POINTS)
 GRID_MAX_X = max(p[0] for p in _GRID_POINTS)
 GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
-BASES = [(p[0] + 2, p[1]) for p in AMR_STARTS.values()] # Parking spots are 2 grids to the right
+BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
-SUPPLY_LOCATIONS = {"A": AMR_STARTS["AMR1"], "B": AMR_STARTS["AMR2"], "C": AMR_STARTS["AMR3"]}
+SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
 DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
@@ -149,7 +149,7 @@ def shortest_path(start: Tuple[int, int], end: Tuple[int, int]) -> List[Tuple[in
 
 # Dynamic A* for collision avoidance
 def find_dynamic_path(start: Tuple[int, int], end: Tuple[int, int], start_time: float, 
-                     reservations: set, amr_states: Dict[str, Tuple[Tuple[int, int], float]], 
+                     reservations: Dict[Tuple[Tuple[int, int], int], str], amr_states: Dict[str, Tuple[Tuple[int, int], float]], 
                      active_amr: str) -> List[Tuple[int, int]]:
     t_start = int(start_time)
     open_set = []
@@ -269,6 +269,66 @@ def nearest_base_to_station(station: str) -> Tuple[int, int]:
     target = STATIONS[station]
     return min(BASES, key=lambda base: grid_distance(base, target))
 
+def _diagnose_and_print_failure(amr: str, job_id: int, path_type: str, start_pos: Tuple[int, int], end_pos: Tuple[int, int], start_time: float, reservations: Dict, amr_states: Dict):
+    """Prints a detailed reason when pathfinding fails."""
+    reason = "Unknown"
+    t_start_diag = int(start_time)
+    next_t_diag = t_start_diag + 1
+    
+    is_surrounded = True
+    possible_moves = list(_DELTAS) + [(0,0)]
+    surrounding_reasons = []
+    
+    for dx, dy in possible_moves:
+        neighbor = (start_pos[0] + dx, start_pos[1] + dy)
+        
+        if not _is_within_bounds(neighbor) or neighbor in OBSTACLES:
+            continue
+
+        if (neighbor, next_t_diag) in reservations:
+            blocker_amr = reservations.get((neighbor, next_t_diag), "Unknown")
+            surrounding_reasons.append(f"{neighbor} res by {blocker_amr}")
+            continue
+
+        is_blocked_by_idle = False
+        for other_amr, (pos, free_t) in amr_states.items():
+            if other_amr == amr: continue
+            if pos == neighbor and next_t_diag >= free_t:
+                surrounding_reasons.append(f"{neighbor} occ by {other_amr}")
+                is_blocked_by_idle = True
+                break
+        if is_blocked_by_idle:
+            continue
+
+        is_surrounded = False
+        break
+
+    if is_surrounded:
+        reason = f"Trapped at start. Surrounding: {', '.join(surrounding_reasons)}"
+    else:
+        # Check static path
+        static_path = shortest_path(start_pos, end_pos)
+        path_blockers = []
+        # Check first few steps of static path
+        check_steps = min(len(static_path), 20) 
+        for i in range(1, check_steps):
+            node = static_path[i]
+            t = t_start_diag + i
+            if (node, t) in reservations:
+                path_blockers.append(f"({node}@{t} by {reservations[(node, t)]})")
+            for other_amr, (pos, free_t) in amr_states.items():
+                if other_amr == amr: continue
+                if pos == node and t >= free_t:
+                    path_blockers.append(f"({node}@{t} by idle {other_amr})")
+        
+        if path_blockers:
+            reason = f"Static path blocked: {', '.join(path_blockers[:3])}"
+        else:
+            reason = f"Start not trapped, static path clear. Likely MAX_DEPTH({MAX_DEPTH}) reached or dynamic loop."
+
+    print(f"  [WARNING] Pathfinding failed for AMR '{amr}' on Job {job_id} ({path_type} path: {start_pos} -> {end_pos} at t={start_time:.1f}).")
+    print(f"  [DIAGNOSIS] Reason: {reason}")
+
 def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]], int]:
     job_map = {job.idx: job for job in jobs} # get job information
     timelines: List[Tuple] = []
@@ -277,7 +337,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
     # Track AMR states for collision avoidance: amr -> (position, free_time)
     amr_states = {amr: (AMR_STARTS[amr], 0.0) for amr in AMR_STARTS}
     path_logs = {amr: [current_position[amr]] for amr in AMR_STARTS} if need_log else {}
-    reservations = set() # (x, y, t)
+    reservations: Dict[Tuple[Tuple[int, int], int], str] = {} # ((x, y), t) -> amr_id
     inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_STARTS} # How much material do we currently have on hand for this AMR?
     if "AMR1" in inventory: inventory["AMR1"]["A"] = 3
     if "AMR2" in inventory: inventory["AMR2"]["B"] = 3
@@ -304,10 +364,15 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
                 supply_path = shortest_path(current_position[amr], supply_location)
             supply_time = int(len(supply_path) - 1)
             supply_end = start_time + supply_time
+            if supply_time == 0 and current_position[amr] != supply_location:
+                supply_time = MAX_DEPTH
+                invalid_jobs_count += 1
+                if need_log and check_collision:
+                    _diagnose_and_print_failure(amr, job.idx, "supply", current_position[amr], supply_location, start_time, reservations, amr_states)
             if check_collision:
                 # Reserve path
                 for t_offset, pt in enumerate(supply_path):
-                    reservations.add((pt, int(start_time) + t_offset))
+                    reservations[(pt, int(start_time) + t_offset)] = amr
                 amr_states[amr] = (supply_location, supply_end)
             
             if need_log and supply_time > 0:
@@ -329,12 +394,14 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         if travel_time == 0 and current_position[amr] != STATIONS[job.station]:
             travel_time = MAX_DEPTH # Heavy penalty for "teleporting"
             invalid_jobs_count += 1
+            if need_log and check_collision:
+                _diagnose_and_print_failure(amr, job.idx, "travel", current_position[amr], STATIONS[job.station], travel_start, reservations, amr_states)
 
         travel_end = travel_start + travel_time
         if check_collision:
             # Reserve path
             for t_offset, pt in enumerate(travel_path):
-                reservations.add((pt, int(travel_start) + t_offset))
+                reservations[(pt, int(travel_start) + t_offset)] = amr
             
         if need_log and travel_time > 0:
             timelines.append((amr, travel_start, travel_end, "travel", f"Job{job.idx} trans {travel_time}s"))
@@ -354,7 +421,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         if check_collision:
             # Reserve station during wait and process
             for t in range(int(travel_end), int(process_end) + 1):
-                reservations.add((STATIONS[job.station], t))
+                reservations[(STATIONS[job.station], t)] = amr
             amr_states[amr] = (STATIONS[job.station], process_end)
             
         inventory[amr][material] -= 1
@@ -362,18 +429,16 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         
         # Look-ahead Return Logic: Decide what to do after the job is done.
         next_job = get_next_job_for_amr(amr, pos, order, individual.amr_assignment, jobs)
-        should_return_to_base = True
-        if next_job:
-            if inventory[amr][next_job.type_] > 0: # have inventory for next job
-                should_return_to_base = False
-        else:
-            # No future jobs for this AMR, so it should return to its home base.
-            should_return_to_base = True
+        
+        # ALWAYS force the AMR to clear the workstation to prevent gridlocking other robots.
+        should_return_to_base = True 
 
         return_start = process_end
+        
         if should_return_to_base:
             # Determine return destination: strategic base for next job, or home base if no next job.
             if next_job:
+                # Find the nearest base to wait at for the upcoming job
                 next_base = nearest_base_to_station(next_job.station)
                 if check_collision:
                     # Find nearest base that is NOT occupied by another AMR
@@ -389,23 +454,25 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
                         if not is_occupied:
                             next_base = base
                             break
-                else:
-                    next_base = nearest_base_to_station(next_job.station)
             else:
-                # Return to parking spot (2 grids right of base)
-                base_pos = AMR_STARTS[amr]
-                next_base = (base_pos[0] + 2, base_pos[1])
+                # Local queue is empty -> Return to this specific AMR's start location
+                next_base = AMR_STARTS[amr]
 
             if check_collision:
                 return_path = find_dynamic_path(STATIONS[job.station], next_base, return_start, reservations, amr_states, amr)
             else:
                 return_path = shortest_path(STATIONS[job.station], next_base)
             return_time = int(len(return_path) - 1)
+            if return_time == 0 and STATIONS[job.station] != next_base:
+                return_time = MAX_DEPTH
+                invalid_jobs_count += 1
+                if need_log and check_collision:
+                    _diagnose_and_print_failure(amr, job.idx, "return", STATIONS[job.station], next_base, return_start, reservations, amr_states)
             return_end = return_start + return_time
 
             if check_collision:
                 for t_offset, pt in enumerate(return_path):
-                    reservations.add((pt, int(return_start) + t_offset))
+                    reservations[(pt, int(return_start) + t_offset)] = amr
                 amr_states[amr] = (next_base, return_end)
                 
             if need_log:
@@ -617,7 +684,7 @@ def evolve(jobs: List[Job]) -> Tuple[Individual, List[Tuple]]:
     return archive_best, timeline
 
 
-def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs: List[Job] = None, solve_time: float = None) -> None:
+def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs: List[Job] = None, solve_time: float = None, invalid_count: int = 0) -> None:
     AMR_COUNT = len(AMR_STARTS)
     AX_Y_MIN, AX_Y_MAX = 0.0, 2.0
     BOTTOM_MIN = 0.0
@@ -723,6 +790,8 @@ def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs
     title_text = f"AMR Schedule (Optimized GA) | Makespan: {max_timeline_time:.1f}s"
     if solve_time is not None:
         title_text += f" | Solve: {solve_time:.4f}s"
+    if invalid_count > 0:
+        title_text += f" | Invalid Paths: {invalid_count}"
     ax.set_title(title_text, pad=10)
     ax.grid(True, axis="x", linestyle=":", color='gray', alpha=0.5, zorder=0)
     handles = [Patch(facecolor=TYPE_COLORS[k], edgecolor="black", label=f"Type {k}") for k in sorted(TYPE_COLORS.keys())]
@@ -764,14 +833,15 @@ def make_jobs() -> List[Job]:
         station = random.choice(stations)
         jobs.append(Job(idx=idx, type_=type_, duration=TYPE_DURATION[type_], station=station))
     return jobs
-def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None) -> Tuple[float, float]:
-    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule(individual, jobs, need_log=False, check_collision=True)
+def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False) -> Tuple[float, float]:
+    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule(individual, jobs, need_log=True, check_collision=True)
     makespan = max(availability.values())
     print(f"Optimal Makespan Found: {makespan:.2f}s")
     print(f"Invalid Jobs Count: {invalid_count}")
     if solve_time is not None:
         print(f"Computation Time: {solve_time:.4f}s")
-    # plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time)
+    if show_gantt:
+        plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count)
     return makespan, solve_time
 
 if __name__ == "__main__":
@@ -791,7 +861,7 @@ if __name__ == "__main__":
             start_time = time.perf_counter()
             best_ind, _ = evolve(event["jobs"])
             solve_dur = time.perf_counter() - start_time
-            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur)
+            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur, show_gantt=False)
             results_data.append([event['index'], f"{makespan:.2f}", f"{computation_time:.4f}" if computation_time is not None else "0.0000"])
     else:
         print("No dispatch file found. Generating random jobs...")
@@ -799,7 +869,7 @@ if __name__ == "__main__":
         start_time = time.perf_counter()
         best_ind, _ = evolve(jobs)
         solve_dur = time.perf_counter() - start_time
-        makespan, computation_time = describe_solution(best_ind, jobs, solve_time=solve_dur)
+        makespan, computation_time = describe_solution(best_ind, jobs, solve_time=solve_dur, show_gantt=True)
         results_data.append(["random", f"{makespan:.2f}", f"{computation_time:.4f}" if computation_time is not None else "0.0000"])
 
     if results_data:
