@@ -66,11 +66,11 @@ def decode_station_busy(state_vec: np.ndarray) -> Dict[str, float]:
         "S5": float(state_vec[-1]),
     }
 
-
+#build the action of AMR list
 def build_actions_for_tasks(
-    tasks: List[dict],
-    inventory: Dict[str, int],
-    capacity_per_type: int,
+    tasks: List[dict],  #the available task
+    inventory: Dict[str, int], #the amout of material amr store
+    capacity_per_type: int, 
     allow_proactive_replenish: bool = True,
 ) -> List[Tuple[int, int]]:
     """

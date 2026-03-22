@@ -1,0 +1,1 @@
+{"generated_at": 1771909438.5587988, "dispatch_time": 180.58405570088755, "jobs": [{"jid": 0, "type": "A", "proc_time": 10.0, "station": 5}, {"jid": 1, "type": "B", "proc_time": 15.0, "station": 1}, {"jid": 2, "type": "A", "proc_time": 10.0, "station": 1}, {"jid": 3, "type": "A", "proc_time": 10.0, "station": 4}, {"jid": 4, "type": "B", "proc_time": 15.0, "station": 2}]}

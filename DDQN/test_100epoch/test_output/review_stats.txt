@@ -1,0 +1,7 @@
+RUN|target=test_case/test_5job.jsonl|mode=each_line|scope=file
+[test_5job.jsonl] CASE 000 jobs=5 mk=77.000 mk/job=15.400 mk/proc=0.906
+[test_5job.jsonl] CASE 000 route_jsonl=test_output\review_route_logs\test_5job_case_000_amr_path.jsonl lines=78
+[test_5job.jsonl] CASE 001 jobs=5 mk=91.000 mk/job=18.200 mk/proc=1.213
+[test_5job.jsonl] CASE 001 route_jsonl=test_output\review_route_logs\test_5job_case_001_amr_path.jsonl lines=92
+PER_FILE|file=test_5job.jsonl|cases=2|mk_avg=84.000|mk_min=77.000|mk_max=91.000
+FILE SUMMARY (test_5job.jsonl)|cases=2|total_jobs=10|mk_avg=84.000|mk_std=7.000|mk_min=77.000|mk_max=91.000|mk_job_avg=16.800|mk_proc_avg=1.060

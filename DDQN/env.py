@@ -57,6 +57,8 @@ class TaskSchedulingEnv:
         self.capacity_per_type = 3
         # If True, action space includes proactive replenishment even when inventory > 0.
         self.allow_proactive_replenish = True
+        # If True, AMRs use time-aware collision avoidance; if False, route overlap is allowed.
+        self.enable_collision_avoidance = True
         self.initial_robot_positions: List[Coord] = [
             (2, 1),
             (2, 4),
@@ -525,6 +527,45 @@ class TaskSchedulingEnv:
         inv = int(self.robot_inventory[robot_id][jtype])
         need_pickup = bool(replenish > 0 or inv == 0)
 
+        if not self.enable_collision_avoidance:
+            if need_pickup:
+                p1 = [self._to_coord(p) for p in self._path(pos, pickup)]
+                p2 = [self._to_coord(p) for p in self._path(pickup, drop)]
+                if (not p1) or (p1[-1] != pickup) or (not p2) or (p2[-1] != drop):
+                    raise RuntimeError(
+                        f"No path for AMR{robot_id+1}: {pos}->{drop} at t={start_t:.3f}"
+                    )
+                transport_path = p1 + p2[1:]
+            else:
+                transport_path = [self._to_coord(p) for p in self._path(pos, drop)]
+                if (not transport_path) or (transport_path[-1] != drop):
+                    raise RuntimeError(
+                        f"No path for AMR{robot_id+1}: {pos}->{drop} at t={start_t:.3f}"
+                    )
+
+            travel = float(max(0, len(transport_path) - 1))
+            arrive_t = start_t + travel
+            process_start_t = max(arrive_t, station_free)
+
+            if process_start_t > arrive_t + 1e-9:
+                add_steps = int(math.ceil(process_start_t - arrive_t - 1e-9))
+                transport_path = self._delay_before_goal(transport_path, add_steps)
+                travel = float(max(0, len(transport_path) - 1))
+                arrive_t = start_t + travel
+                process_start_t = max(arrive_t, station_free)
+
+            wait = max(0.0, process_start_t - arrive_t)
+            return {
+                "start_t": float(start_t),
+                "travel": float(travel),
+                "wait": float(wait),
+                "proc": float(proc),
+                "arrive_t": float(arrive_t),
+                "process_start_t": float(process_start_t),
+                "transport_path": [self._to_coord(p) for p in transport_path],
+                "need_pickup": bool(need_pickup),
+            }
+
         if need_pickup:
             base_dist = float(self._dist(pos, pickup) + self._dist(pickup, drop))
         else:
@@ -770,6 +811,7 @@ class TaskSchedulingEnv:
         self._advance_to_decision_point()
         return self._get_state()
 
+#push the new task into the available_task
     def _release_until(self, t: float) -> None:
         while self.release_idx < len(self.release_events):
             rt, jobs = self.release_events[self.release_idx]
@@ -800,18 +842,23 @@ class TaskSchedulingEnv:
 
         self.release_events.append((dispatch_time, jobs_copy))
 
+#switch the time slot to the model decision point (event-driven) 
     def _advance_to_decision_point(self) -> None:
         while True:
             self._release_until(self.t)
+            
+            #the AMR free time
             idle = [
                 i for i in range(self.num_robots) if self.robot_free_times[i] <= self.t + 1e-9
             ]
 
+            #into the decision point
             if idle and self.available_tasks:
-                self.current_robot = min(idle, key=lambda i: (self.robot_free_times[i], i))
+                self.current_robot = min(idle, key=lambda i: (self.robot_free_times[i], i)) #the decision point ==> no consider the amr location
                 self.current_time = self.t
                 return
 
+            #no available amr can choose
             if not self.available_tasks:
                 if self.release_idx < len(self.release_events):
                     self.t = max(self.t, self.release_events[self.release_idx][0])
@@ -924,27 +971,28 @@ class TaskSchedulingEnv:
         self.station_busy_until[station] = t_proc_end
 
         post_pos = self._post_process_position(transport_path, self._to_coord(task["drop"]))
-        post_cands = self._post_process_candidates(transport_path, self._to_coord(task["drop"]))
-        post_res = self._build_dynamic_reservations(
-            rid,
-            t_proc_end,
-            t_proc_end + 3.0,
-            future_work_after_dispatch=True,
-        )
-        for cand in post_cands:
-            if self._point_conflict(post_res, cand, t_proc_end):
-                continue
-            if self._transition_conflict(
-                post_res,
-                cand,
-                cand,
+        if self.enable_collision_avoidance:
+            post_cands = self._post_process_candidates(transport_path, self._to_coord(task["drop"]))
+            post_res = self._build_dynamic_reservations(
+                rid,
                 t_proc_end,
-                t_proc_end + 1.0,
-                ignore_source_point_at_t0=True,
-            ):
-                continue
-            post_pos = self._to_coord(cand)
-            break
+                t_proc_end + 3.0,
+                future_work_after_dispatch=True,
+            )
+            for cand in post_cands:
+                if self._point_conflict(post_res, cand, t_proc_end):
+                    continue
+                if self._transition_conflict(
+                    post_res,
+                    cand,
+                    cand,
+                    t_proc_end,
+                    t_proc_end + 1.0,
+                    ignore_source_point_at_t0=True,
+                ):
+                    continue
+                post_pos = self._to_coord(cand)
+                break
 
         self.robot_free_times[rid] = t_proc_end
         self.robot_positions[rid] = post_pos

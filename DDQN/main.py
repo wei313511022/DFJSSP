@@ -53,6 +53,7 @@ def main():
     epsilon_end = 0.05
     epsilon_decay = 0.995
     allow_proactive_replenish = True
+    enable_collision_avoidance = True
 
     # Training visualization and profiling
     show_train_schedule = True
@@ -123,6 +124,7 @@ def main():
 
     env = TaskSchedulingEnv()
     env.allow_proactive_replenish = allow_proactive_replenish
+    env.enable_collision_avoidance = enable_collision_avoidance
     policy_net = QNetwork(input_dim).to(device)
     target_net = QNetwork(input_dim).to(device)
     target_net.load_state_dict(policy_net.state_dict())

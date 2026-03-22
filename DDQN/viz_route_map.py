@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.patches as patches
@@ -254,18 +255,63 @@ def _draw_base_map(ax, env: TaskSchedulingEnv) -> None:
         ax.text(sx, sy, sname, ha="center", va="center", fontsize=12, color="#d62728", weight="bold")
 
 
-def draw_route_map(ax, env: TaskSchedulingEnv, trace: List[dict], current_t: float) -> List[str]:
+def _normalize_snapshot_for_draw(snap: dict) -> dict:
+    rid = int(snap.get("rid", -1))
+
+    if "pos" in snap and isinstance(snap.get("pos"), (list, tuple)) and len(snap.get("pos")) >= 2:
+        pos = (float(snap["pos"][0]), float(snap["pos"][1]))
+    else:
+        pos = (float(snap.get("x", 0.0)), float(snap.get("y", 0.0)))
+
+    inv_raw = snap.get("inv", snap.get("inventory_net", snap.get("inventory", {})))
+    inv = {
+        "A": int(inv_raw.get("A", 0)) if isinstance(inv_raw, dict) else 0,
+        "B": int(inv_raw.get("B", 0)) if isinstance(inv_raw, dict) else 0,
+        "C": int(inv_raw.get("C", 0)) if isinstance(inv_raw, dict) else 0,
+    }
+
+    route_raw = snap.get("route", []) or []
+    route: List[Tuple[float, float]] = []
+    for p in route_raw:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            route.append((float(p[0]), float(p[1])))
+
+    jid_raw = snap.get("jid", None)
+    jid = None if jid_raw is None else int(jid_raw)
+
+    return {
+        "rid": rid,
+        "pos": pos,
+        "inv": inv,
+        "status": str(snap.get("status", "idle")),
+        "mode": str(snap.get("mode", "idle")),
+        "jid": jid,
+        "dst": snap.get("dst", None),
+        "route": route,
+        "proc_elapsed": float(snap.get("proc_elapsed", 0.0)),
+        "proc_total": float(snap.get("proc_total", 0.0)),
+        "proc_remaining": float(snap.get("proc_remaining", 0.0)),
+    }
+
+
+def _draw_route_map_from_snapshots(
+    ax, env: TaskSchedulingEnv, snapshots: List[dict], current_t: float, max_t: float
+) -> List[str]:
     ax.clear()
     _draw_base_map(ax, env)
-    snapshots, max_t = _robot_snapshot_at_time(env, trace, current_t)
     ax.set_title(f"Route Map | t={current_t:.1f}s / {max_t:.1f}s")
 
     # Strong, fixed color identity per AMR.
     colors = ["#e41a1c", "#377eb8", "#4daf4a"]
     status_lines: List[str] = []
 
-    for snap in snapshots:
-        rid = snap["rid"]
+    norm_snaps = [_normalize_snapshot_for_draw(s) for s in snapshots]
+    norm_snaps.sort(key=lambda s: int(s.get("rid", -1)))
+
+    for snap in norm_snaps:
+        rid = int(snap.get("rid", -1))
+        if rid < 0:
+            continue
         color = colors[rid % len(colors)]
         route = snap.get("route", [])
         if len(route) >= 2:
@@ -323,6 +369,35 @@ def draw_route_map(ax, env: TaskSchedulingEnv, trace: List[dict], current_t: flo
     return status_lines
 
 
+def draw_route_map(ax, env: TaskSchedulingEnv, trace: List[dict], current_t: float) -> List[str]:
+    snapshots, max_t = _robot_snapshot_at_time(env, trace, current_t)
+    return _draw_route_map_from_snapshots(ax, env, snapshots, current_t, max_t)
+
+
+def _load_route_jsonl_frames(route_jsonl_path: str) -> List[dict]:
+    frames: List[dict] = []
+    with open(route_jsonl_path, "r", encoding="utf-8") as f:
+        for ln, line in enumerate(f, start=1):
+            txt = line.strip()
+            if not txt:
+                continue
+            try:
+                rec = json.loads(txt)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid route jsonl at line {ln} in '{route_jsonl_path}': {e.msg}"
+                ) from e
+
+            t = float(rec.get("t", len(frames)))
+            amrs = rec.get("amrs", [])
+            if not isinstance(amrs, list):
+                amrs = []
+            frames.append({"t": t, "amrs": amrs})
+
+    frames.sort(key=lambda r: float(r.get("t", 0.0)))
+    return frames
+
+
 def show_route_map_replay(
     env: TaskSchedulingEnv,
     trace: List[dict],
@@ -333,6 +408,12 @@ def show_route_map_replay(
     if not trace:
         print("No trace to render on route map.")
         return
+    backend = str(plt.get_backend()).lower()
+    if "inline" in backend:
+        print(
+            "Route replay controls may be non-interactive on inline backend. "
+            "Use `%matplotlib qt` or `%matplotlib widget`."
+        )
 
     _, max_t = _robot_snapshot_at_time(env, trace, initial_t)
     max_t = max(1.0, max_t)
@@ -388,4 +469,83 @@ def show_route_map_replay(
 
     btn.on_clicked(on_toggle)
     redraw(initial_t)
+    plt.show()
+
+
+def show_route_map_replay_from_jsonl(
+    env: TaskSchedulingEnv,
+    route_jsonl_path: str,
+    initial_t: float = 0.0,
+    play_interval_ms: int = 120,
+) -> None:
+    backend = str(plt.get_backend()).lower()
+    if "inline" in backend:
+        print(
+            "Route replay controls may be non-interactive on inline backend. "
+            "Use `%matplotlib qt` or `%matplotlib widget`."
+        )
+    frames = _load_route_jsonl_frames(route_jsonl_path)
+    if not frames:
+        print(f"No frames in route jsonl: {route_jsonl_path}")
+        return
+
+    times = [float(f.get("t", 0.0)) for f in frames]
+    max_t = max(1.0, max(times))
+    idx0 = int(np.argmin(np.abs(np.asarray(times, dtype=np.float64) - float(initial_t))))
+
+    fig, ax = plt.subplots(figsize=(10, 9))
+    fig.subplots_adjust(bottom=0.2, top=0.92)
+    status_text = fig.text(0.02, 0.03, "", fontsize=11, ha="left", va="bottom")
+
+    ax_slider = fig.add_axes([0.16, 0.11, 0.56, 0.03])
+    ax_button = fig.add_axes([0.76, 0.102, 0.15, 0.05])
+    slider = Slider(ax_slider, "frame", 0, len(frames) - 1, valinit=idx0, valstep=1)
+    btn = Button(ax_button, "Play")
+
+    state = {"playing": False, "updating": False}
+
+    def redraw_by_idx(i: int) -> None:
+        idx = int(max(0, min(len(frames) - 1, i)))
+        frame = frames[idx]
+        t = float(frame.get("t", 0.0))
+        snapshots = frame.get("amrs", [])
+        lines = _draw_route_map_from_snapshots(ax, env, snapshots, t, max_t)
+        ax.set_title(f"Route Map | t={t:.1f}s / {max_t:.1f}s | frame={idx+1}/{len(frames)}")
+        status_text.set_text("\n".join(lines))
+        fig.canvas.draw_idle()
+
+    def set_idx(i: int) -> None:
+        state["updating"] = True
+        slider.set_val(int(max(0, min(len(frames) - 1, i))))
+        state["updating"] = False
+
+    def on_slider(val: float) -> None:
+        if state["updating"]:
+            return
+        redraw_by_idx(int(round(float(val))))
+
+    slider.on_changed(on_slider)
+    timer = fig.canvas.new_timer(interval=play_interval_ms)
+
+    def on_timer():
+        nxt = int(round(float(slider.val))) + 1
+        if nxt > len(frames) - 1:
+            nxt = 0
+        set_idx(nxt)
+        redraw_by_idx(nxt)
+
+    timer.add_callback(on_timer)
+
+    def on_toggle(_event):
+        state["playing"] = not state["playing"]
+        if state["playing"]:
+            btn.label.set_text("Pause")
+            timer.start()
+        else:
+            btn.label.set_text("Play")
+            timer.stop()
+        fig.canvas.draw_idle()
+
+    btn.on_clicked(on_toggle)
+    redraw_by_idx(idx0)
     plt.show()
