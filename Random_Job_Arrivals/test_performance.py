@@ -12,19 +12,6 @@ GridEnv = None
 SchedulerAgent = None
 CONFIG = None
 
-def snapshot_env(env):
-    """Return hashable snapshots for diff."""
-    active_ids = tuple(sorted(getattr(j, "jid", -1) for j in getattr(env, "active_jobs", [])))
-    queue_ids  = tuple(sorted(getattr(j, "jid", -1) for j in getattr(env, "queue", [])))
-    done_ids   = tuple(sorted(getattr(j, "jid", -1) for j in getattr(env, "completed_jobs", [])))
-    return active_ids, queue_ids, done_ids
-
-def get_local_queues(env):
-    """Return list of lists of job ids in each AMR local_queue."""
-    lqs = []
-    for a in getattr(env, "amrs", []):
-        lqs.append(list(getattr(a, "local_queue", [])))
-    return lqs
 
 def load_agent(path):
     agent = SchedulerAgent().to(CONFIG['DEVICE'])
@@ -55,11 +42,18 @@ def snapshot_env(env):
 
 
 def get_local_queues(env):
-    """Return list of local_queue contents per AMR."""
+    """Return list of local_queue contents per AMR. Supports both V5 and V6."""
     lqs = []
-    for a in getattr(env, "amrs", []):
-        q = list(getattr(a, "local_queue", []))
-        lqs.append(q)
+    if hasattr(env, "sim") and hasattr(env.sim, "amrs"):
+        # V6 FactorySimulator
+        for a in env.sim.amrs.values():
+            q = [j.jid for j in getattr(a, "queue", [])]
+            lqs.append(q)
+    else:
+        # V5 List of AMRs
+        for a in getattr(env, "amrs", []):
+            q = list(getattr(a, "local_queue", []))
+            lqs.append(q)
     return lqs
 
 
@@ -327,9 +321,9 @@ def run_test(model_path, output_csv):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
-    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v3/gnn_ddqn_model_v3.pth", help="Path to the model file")
-    parser.add_argument("--output", type=str, default="gnn_ddqn_model_v5/benchmark_results.csv", help="Path to the output CSV file")
-    parser.add_argument("--module", type=str, default="GNN_DDQN_GA_V5", help="Module to import GridEnv and SchedulerAgent from")
+    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v6/gnn_ddqn_model_v6.pth", help="Path to the model file")
+    parser.add_argument("--output", type=str, default="gnn_ddqn_model_v6/benchmark_results.csv", help="Path to the output CSV file")
+    parser.add_argument("--module", type=str, default="GNN_DDQN_V6", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()
 
     try:

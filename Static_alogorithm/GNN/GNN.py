@@ -17,6 +17,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Import all constants and simulation logic from GA
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from GA_code.GA import (
     Job, Individual, AMR_STARTS, AMR_KEYS, STATIONS, OBSTACLES, _GRID_POINTS,
     GRID_MIN_X, GRID_MAX_X, GRID_MIN_Y, GRID_MAX_Y, BASES, TYPE_DURATION,
@@ -24,13 +27,13 @@ from GA_code.GA import (
     JOB_COUNT, MAX_DEPTH, routing_iters, collision_routing_iters,
     _is_within_bounds, _DELTAS, _adjacent_points, _build_path, _manhattan_path,
     heuristic, shortest_path, find_dynamic_path, _extend_path_log, grid_distance,
-    nearest_base_to_station, _diagnose_and_print_failure, decode_schedule, fitness, local_improve,
+    nearest_base_to_station, _diagnose_and_print_failure, decode_schedule, decode_schedule_tick_by_tick, fitness, local_improve,
     plot_gantt, station_key_from_value, load_dispatch_events, make_jobs
 )
 
 # Overwrite describe_solution locally to pass save_img
 def describe_solution_gnn(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False, save_img: str = None) -> Tuple[float, float]:
-    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule(individual, jobs, need_log=True, check_collision=True)
+    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule_tick_by_tick(individual, jobs, need_log=True, check_collision=True)
     makespan = max(availability.values())
     print(f"Optimal Makespan Found: {makespan:.2f}s")
     print(f"Invalid Jobs Count: {invalid_count}")
@@ -38,12 +41,7 @@ def describe_solution_gnn(individual: Individual, jobs: List[Job], solve_time: f
         print(f"Computation Time: {solve_time:.4f}s")
     if show_gantt or save_img:
         # Generate plot
-        plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count)
-        if save_img:
-            plt.savefig(save_img, dpi=300, bbox_inches='tight')
-            print(f"Saved Gantt chart to {save_img}")
-        if not show_gantt:
-            plt.close() # Close plot if we only wanted to save it
+        plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count, show_gantt=show_gantt, save_img=save_img)
             
     return makespan, solve_time
 
@@ -218,7 +216,7 @@ def extract_state(jobs, assigned_jobs_set, amr_positions, amr_availabilities, am
     )
 
 # ===== GNN Scheduling Heuristic Loop =====
-def solve_with_gnn(jobs, model, deterministic=True):
+def solve_with_gnn(jobs, model, deterministic=True, init_state: dict = None):
     """
     Uses the GNN to autoregressively build a schedule.
     Returns: The final Individual, the total log probabilities of the sequence, and the total execution time of the building process.
@@ -227,14 +225,20 @@ def solve_with_gnn(jobs, model, deterministic=True):
     
     # Internal Simulator State (Tracking rough time/inventory during sequence building)
     # We use Manhattan distance here for speed. The exact simulation happens later in `decode_schedule`.
-    amr_positions = {amr: AMR_STARTS[amr] for amr in AMR_KEYS}
-    amr_availabilities = {amr: 0.0 for amr in AMR_KEYS}
-    station_availabilities = {s: 0.0 for s in STATIONS.keys()}
-    
-    amr_inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_KEYS}
-    amr_inventory["AMR1"]["A"] = 3
-    amr_inventory["AMR2"]["B"] = 3
-    amr_inventory["AMR3"]["C"] = 3
+    if init_state:
+        amr_positions = {amr: init_state["positions"].get(amr, AMR_STARTS[amr]) for amr in AMR_KEYS}
+        amr_availabilities = {amr: float(init_state["availability"].get(amr, 0.0)) for amr in AMR_KEYS}
+        station_availabilities = {s: float(init_state["time"]) for s in STATIONS.keys()}
+        amr_inventory = {amr: init_state["inventory"].get(amr, {mat: 0 for mat in TYPE_DURATION.keys()}).copy() for amr in AMR_KEYS}
+    else:
+        amr_positions = {amr: AMR_STARTS[amr] for amr in AMR_KEYS}
+        amr_availabilities = {amr: 0.0 for amr in AMR_KEYS}
+        station_availabilities = {s: 0.0 for s in STATIONS.keys()}
+        
+        amr_inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_KEYS}
+        amr_inventory["AMR1"]["A"] = 3
+        amr_inventory["AMR2"]["B"] = 3
+        amr_inventory["AMR3"]["C"] = 3
     
     assigned_jobs_set = set()
     

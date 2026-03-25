@@ -6,7 +6,7 @@ import random
 
 # Import from the GNN script
 from GNN import SchedulerGNN, solve_with_gnn
-from GA_code.GA import make_jobs, describe_solution
+from GA_code.GA import make_jobs, describe_solution, local_improve, routing_iters, collision_routing_iters
 
 def train(args):
     # Setup
@@ -14,8 +14,8 @@ def train(args):
     print(f"Training on: {device}")
     
     # Hyperparameters
-    num_epochs = 100
-    batch_size = 5 # Number of episodes (schedules) to sample before a weight update
+    num_epochs = 1000
+    batch_size = 16 # Number of episodes (schedules) to sample before a weight update
     lr = 1e-3
     
     # Load test case if specified
@@ -58,6 +58,13 @@ def train(args):
             
             # Forward pass: Sample a schedule
             ind, total_log_prob, solve_dur = solve_with_gnn(jobs, model, deterministic=False)
+            
+            # Apply Local Improve
+            improve_start = time.perf_counter()
+            ind = local_improve(ind, jobs, max_iters=routing_iters)
+            if collision_routing_iters > 0:
+                ind = local_improve(ind, jobs, max_iters=collision_routing_iters, check_collision=True)
+            solve_dur += (time.perf_counter() - improve_start)
             
             # Simulator evaluation: get the exact makespan (No gantt plot during training)
             # check_collision=True is implicitly called inside describe_solution

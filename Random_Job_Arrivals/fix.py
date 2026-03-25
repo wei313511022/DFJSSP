@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
-from GNN_DDQN_GA_V5 import GridEnv, CONFIG
+from GNN_DDQN_V6 import GridEnv, CONFIG
 
 # Ensure we use the correct device
 CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -64,7 +64,7 @@ ALL_STATIONS: Set[Tuple[int, int]] = {
 
 # Optional: static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (6, 0),(6, 1),(6, 4),(6, 5),(6, 8),(6, 9),
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3)
     
 }
 

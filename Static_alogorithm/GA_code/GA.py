@@ -27,18 +27,19 @@ STATIONS = {
     "station5": (9, 0),
 }
 OBSTACLES = {
-    (6,8),(6,9),(6,6),(6,5),(6,4),(6,2),(6,1),(6,0)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3)
 }
-_GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES) + [(0, 7), (0, 4), (0, 1)]
+BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
+TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
+SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
+_GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES) + list(SUPPLY_LOCATIONS.values())
 GRID_MIN_X = min(p[0] for p in _GRID_POINTS)
 GRID_MAX_X = max(p[0] for p in _GRID_POINTS)
 GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
-BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
-TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
-SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
+
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_20.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_80.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        
@@ -46,8 +47,8 @@ POPULATION_SIZE = 200    # number of candidate solutions
 GENERATIONS = 150       
 MUTATION_RATE = 0.2     
 STAGNATION_LIMIT = 40   # number of convergence iterations 
-routing_iters = 1000 
-collision_routing_iters = 20
+routing_iters = 1000
+collision_routing_iters = 2000
 
 # MAX_DEPTH limits the Space-Time A* search horizon (moves + waits).
 # It prevents infinite searches in highly congested scenarios.
@@ -329,19 +330,28 @@ def _diagnose_and_print_failure(amr: str, job_id: int, path_type: str, start_pos
     print(f"  [WARNING] Pathfinding failed for AMR '{amr}' on Job {job_id} ({path_type} path: {start_pos} -> {end_pos} at t={start_time:.1f}).")
     print(f"  [DIAGNOSIS] Reason: {reason}")
 
-def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]], int]:
+def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False, init_state: dict = None) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]], int]:
     job_map = {job.idx: job for job in jobs} # get job information
     timelines: List[Tuple] = []
-    availability = {amr: 0.0 for amr in AMR_STARTS} # amr availability time
-    current_position = {amr: AMR_STARTS[amr] for amr in AMR_STARTS} # current position of each AMR
-    # Track AMR states for collision avoidance: amr -> (position, free_time)
-    amr_states = {amr: (AMR_STARTS[amr], 0.0) for amr in AMR_STARTS}
+    
+    if init_state:
+        availability = {amr: float(init_state["availability"].get(amr, 0.0)) for amr in AMR_STARTS}
+        current_position = {amr: init_state["positions"].get(amr, AMR_STARTS[amr]) for amr in AMR_STARTS}
+        amr_states = {amr: (current_position[amr], availability[amr]) for amr in AMR_STARTS}
+        inventory = {amr: init_state["inventory"].get(amr, {mat: 0 for mat in TYPE_DURATION.keys()}).copy() for amr in AMR_STARTS}
+    else:
+        availability = {amr: 0.0 for amr in AMR_STARTS} # amr availability time
+        current_position = {amr: AMR_STARTS[amr] for amr in AMR_STARTS} # current position of each AMR
+        # Track AMR states for collision avoidance: amr -> (position, free_time)
+        amr_states = {amr: (AMR_STARTS[amr], 0.0) for amr in AMR_STARTS}
+        inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_STARTS} # How much material do we currently have on hand for this AMR?
+        if "AMR1" in inventory: inventory["AMR1"]["A"] = 3
+        if "AMR2" in inventory: inventory["AMR2"]["B"] = 3
+        if "AMR3" in inventory: inventory["AMR3"]["C"] = 3
+        
     path_logs = {amr: [current_position[amr]] for amr in AMR_STARTS} if need_log else {}
     reservations: Dict[Tuple[Tuple[int, int], int], str] = {} # ((x, y), t) -> amr_id
-    inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_STARTS} # How much material do we currently have on hand for this AMR?
-    if "AMR1" in inventory: inventory["AMR1"]["A"] = 3
-    if "AMR2" in inventory: inventory["AMR2"]["B"] = 3
-    if "AMR3" in inventory: inventory["AMR3"]["C"] = 3
+    
     station_available = {station: 0.0 for station in STATIONS} # station availability time
     order = individual.order
     queue_infos: List[Tuple[int, float]] = []
@@ -430,71 +440,322 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         # Look-ahead Return Logic: Decide what to do after the job is done.
         next_job = get_next_job_for_amr(amr, pos, order, individual.amr_assignment, jobs)
         
-        # ALWAYS force the AMR to clear the workstation to prevent gridlocking other robots.
-        should_return_to_base = True 
-
+        # If there is no next job, return home. 
+        # If there IS a next job, go directly to the next station (or supply if empty) 
+        # to clear the current workstation and avoid gridlocking.
+        
         return_start = process_end
         
-        if should_return_to_base:
-            # Determine return destination: strategic base for next job, or home base if no next job.
-            if next_job:
-                # Find the nearest base to wait at for the upcoming job
-                next_base = nearest_base_to_station(next_job.station)
-                if check_collision:
-                    # Find nearest base that is NOT occupied by another AMR
-                    target = STATIONS[next_job.station]
-                    candidates = sorted(BASES, key=lambda b: grid_distance(b, target))
-                    next_base = candidates[0]
-                    for base in candidates:
-                        is_occupied = False
-                        for other_amr, (pos, _) in amr_states.items():
-                            if other_amr != amr and pos == base:
-                                is_occupied = True
-                                break
-                        if not is_occupied:
-                            next_base = base
-                            break
+        if next_job:
+            next_mat = next_job.type_
+            # If we need material for the next job, we can wait/route to the supply station
+            if inventory[amr][next_mat] == 0:
+                next_dest = SUPPLY_LOCATIONS[next_mat]
             else:
-                # Local queue is empty -> Return to this specific AMR's start location
-                next_base = AMR_STARTS[amr]
-
-            if check_collision:
-                return_path = find_dynamic_path(STATIONS[job.station], next_base, return_start, reservations, amr_states, amr)
-            else:
-                return_path = shortest_path(STATIONS[job.station], next_base)
-            return_time = int(len(return_path) - 1)
-            if return_time == 0 and STATIONS[job.station] != next_base:
-                return_time = MAX_DEPTH
-                invalid_jobs_count += 1
-                if need_log and check_collision:
-                    _diagnose_and_print_failure(amr, job.idx, "return", STATIONS[job.station], next_base, return_start, reservations, amr_states)
-            return_end = return_start + return_time
-
-            if check_collision:
-                for t_offset, pt in enumerate(return_path):
-                    reservations[(pt, int(return_start) + t_offset)] = amr
-                amr_states[amr] = (next_base, return_end)
-                
-            if need_log:
-                label = f"Return Home {return_time}s" if not next_job else f"Return {return_time}s"
-                timelines.append((amr, return_start, return_end, "return", label))
-            availability[amr] = return_end
-            current_position[amr] = next_base
-            if need_log: _extend_path_log(path_logs, amr, return_path)
+                next_dest = STATIONS[next_job.station]
         else:
-            # Stay at current station (only happens if next_job exists and we have inventory)
-            availability[amr] = return_start
-            current_position[amr] = STATIONS[job.station]
-            if check_collision:
-                amr_states[amr] = (STATIONS[job.station], return_start)
+            # Local queue is empty -> Return to this specific AMR's start location
+            next_dest = AMR_STARTS[amr]
+
+        if check_collision:
+            return_path = find_dynamic_path(STATIONS[job.station], next_dest, return_start, reservations, amr_states, amr)
+        else:
+            return_path = shortest_path(STATIONS[job.station], next_dest)
+        return_time = int(len(return_path) - 1)
+        if return_time == 0 and STATIONS[job.station] != next_dest:
+            return_time = MAX_DEPTH
+            invalid_jobs_count += 1
+            if need_log and check_collision:
+                _diagnose_and_print_failure(amr, job.idx, "return", STATIONS[job.station], next_dest, return_start, reservations, amr_states)
+        return_end = return_start + return_time
+
+        if check_collision:
+            for t_offset, pt in enumerate(return_path):
+                reservations[(pt, int(return_start) + t_offset)] = amr
+            amr_states[amr] = (next_dest, return_end)
+            
+        if need_log:
+            label = f"Return Home {return_time}s" if not next_job else f"To Next {return_time}s"
+            timelines.append((amr, return_start, return_end, "return", label))
+        availability[amr] = return_end
+        current_position[amr] = next_dest
+        if need_log: _extend_path_log(path_logs, amr, return_path)
 
     return availability, timelines, queue_infos, path_logs, invalid_jobs_count
 
-def fitness(individual: Individual, jobs: List[Job], check_collision: bool = False) -> Tuple[float, List[Tuple]]:
-    availability, timeline, _, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=check_collision)
-    makespan = max(availability.values())
-    #sum of all AMR finish time
-    total_active_time = sum(availability.values())
+# ==========================================
+# True TICK-BY-TICK SIMULATION
+# ==========================================
+def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = True, init_state: dict = None):
+    if not check_collision:
+        return decode_schedule(individual, jobs, need_log, False, init_state=init_state)
+
+    job_map = {job.idx: job for job in jobs}
+    amr_queues = {amr: deque() for amr in AMR_STARTS}
+    for job_idx, amr in zip(individual.order, individual.amr_assignment):
+        amr_queues[amr].append(job_map[job_idx])
+        
+    t = int(init_state["time"]) if init_state else 0
+    
+    if init_state:
+        positions = {amr: init_state["positions"].get(amr, AMR_STARTS[amr]) for amr in AMR_STARTS}
+        inventory = {amr: init_state["inventory"].get(amr, {mat: 0 for mat in TYPE_DURATION.keys()}).copy() for amr in AMR_STARTS}
+        amr_states = {}
+        for amr in AMR_STARTS:
+            avail = init_state["availability"].get(amr, float(t))
+            if avail > t:
+                amr_states[amr] = {'mode': 'processing_old', 'goal': positions[amr], 'job': None, 'proc_ticks': int(avail - t)}
+            else:
+                amr_states[amr] = {'mode': 'idle', 'goal': None, 'job': None, 'proc_ticks': 0}
+    else:
+        positions = {amr: AMR_STARTS[amr] for amr in AMR_STARTS}
+        inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_STARTS}
+        if "AMR1" in inventory: inventory["AMR1"]["A"] = 3
+        if "AMR2" in inventory: inventory["AMR2"]["B"] = 3
+        if "AMR3" in inventory: inventory["AMR3"]["C"] = 3
+        amr_states = {amr: {'mode': 'idle', 'goal': None, 'job': None, 'proc_ticks': 0} for amr in AMR_STARTS}
+    path_logs = {amr: [positions[amr]] for amr in AMR_STARTS} if need_log else {}
+    timelines: List[Tuple] = []
+    queue_infos: List[Tuple[int, float]] = []
+    invalid_jobs_count = 0
+    
+    station_occupied = {s: False for s in STATIONS}
+    
+    t = 0
+    while True:
+        all_idle_and_empty = True
+        for amr in AMR_KEYS:
+            if len(amr_queues[amr]) > 0 or amr_states[amr]['mode'] != 'idle':
+                all_idle_and_empty = False
+                break
+        if all_idle_and_empty:
+            break
+            
+        if t > 10000:
+            print(f"\\n--- DEADLOCK DETECTED at t={t} ---")
+            for amr in AMR_KEYS:
+                print(f"{amr}: pos={positions[amr]}, mode={amr_states[amr]['mode']}, goal={amr_states[amr]['goal']}")
+            invalid_jobs_count += 1
+            break
+            
+        # 1. Transitions
+        for amr in AMR_KEYS:
+            s = amr_states[amr]
+            
+            if s['mode'] == 'idle':
+                if len(amr_queues[amr]) > 0:
+                    s['job'] = amr_queues[amr][0]
+                    mat = s['job'].type_
+                    if inventory[amr][mat] == 0:
+                        s['mode'] = 'moving_supply'
+                        s['goal'] = SUPPLY_LOCATIONS[mat]
+                        if need_log: 
+                            queue_infos.append((s['job'].idx, t))
+                            s['route_start'] = t
+                    else:
+                        s['mode'] = 'moving_station'
+                        s['goal'] = STATIONS[s['job'].station]
+                        if need_log and 'route_start' not in s: s['route_start'] = t
+                else:
+                    if positions[amr] != AMR_STARTS[amr]:
+                        s['mode'] = 'moving_base'
+                        s['goal'] = AMR_STARTS[amr]
+                        if need_log: s['route_start'] = t
+                        s['job'] = None
+                        
+            elif s['mode'] == 'processing':
+                s['proc_ticks'] -= 1
+                if s['proc_ticks'] <= 0:
+                    mat = s['job'].type_
+                    inventory[amr][mat] -= 1
+                    station_occupied[s['job'].station] = False
+                    
+                    if need_log:
+                        timelines.append((amr, t - s['job'].duration, t, f"process_{mat}", f"Job{s['job'].idx} {mat}({int(s['job'].duration)}s)"))
+                        
+                    amr_queues[amr].popleft()
+                    s['mode'] = 'idle'
+                    s['job'] = None
+                    s['goal'] = None
+                    if need_log: 
+                        s['route_start'] = t
+                        # Actually wait, we should log the NEXT job entering the "Dispatching" phase
+                        if len(amr_queues[amr]) > 0:
+                            queue_infos.append((amr_queues[amr][0].idx, t))
+
+            elif s['mode'] == 'processing_old':
+                s['proc_ticks'] -= 1
+                if s['proc_ticks'] <= 0:
+                    s['mode'] = 'idle'
+                    s['goal'] = None
+
+        for amr in AMR_KEYS:
+            s = amr_states[amr]
+            if s['mode'] == 'idle':
+                if len(amr_queues[amr]) > 0:
+                    s['job'] = amr_queues[amr][0]
+                    mat = s['job'].type_
+                    if inventory[amr][mat] == 0:
+                        s['mode'] = 'moving_supply'
+                        s['goal'] = SUPPLY_LOCATIONS[mat]
+                        if need_log: s['route_start'] = t
+                    else:
+                        s['mode'] = 'moving_station'
+                        s['goal'] = STATIONS[s['job'].station]
+                        if need_log and 'route_start' not in s: s['route_start'] = t
+                else:
+                    if positions[amr] != AMR_STARTS[amr]:
+                        s['mode'] = 'moving_base'
+                        s['goal'] = AMR_STARTS[amr]
+                        if need_log: s['route_start'] = t
+                        s['job'] = None
+
+        # 2. Movement Negotiation
+        moves = {}
+        def prio(amr):
+            m = amr_states[amr]['mode']
+            if m == 'processing' or m == 'processing_old': return 100
+            if m == 'idle': return 10
+            if m == 'moving_station': return 50
+            if m == 'moving_supply': return 40
+            return 30
+            
+        ordered = sorted(AMR_KEYS, key=prio, reverse=True)
+        reserved = set()
+        
+        for amr in ordered:
+            m = amr_states[amr]['mode']
+            p = positions[amr]
+            
+            # If we are idle, but we happen to be standing exactly on top of a station tile,
+            # we are blocking it. We must step off it immediately.
+            is_blocking_station = False
+            is_blocking_highway = False
+            if m == 'idle':
+                for st_pos in STATIONS.values():
+                    if p == st_pos:
+                        is_blocking_station = True
+                        break
+                # (2, y) is the main highway. Idle AMRs should yield out of it if possible
+                if p[0] == 2:
+                    is_blocking_highway = True
+            
+            if m == 'processing' or m == 'processing_old':
+                moves[amr] = p
+                reserved.add(p)
+            elif m == 'idle' and not is_blocking_station and not is_blocking_highway and p == amr_states[amr].get('goal', p):
+                moves[amr] = p
+                reserved.add(p)
+            elif m == 'moving_station' and p == amr_states[amr]['goal']:
+                moves[amr] = p
+                reserved.add(p)
+                
+        for amr in ordered:
+            if amr in moves: continue
+            
+            p = positions[amr]
+            
+            # Use dodge_goal if active
+            g = amr_states[amr].get('goal')
+            if g is None:
+                g = p
+            if amr_states[amr].get('dodge_ticks', 0) > 0:
+                g = amr_states[amr]['dodge_goal']
+                amr_states[amr]['dodge_ticks'] -= 1
+                
+            path = shortest_path(p, g)
+            next_step = path[1] if len(path) > 1 else p
+            
+            if next_step in reserved:
+                moves[amr] = p
+                reserved.add(p)
+            else:
+                swap = False
+                for o_amr, o_next in moves.items():
+                    if o_next == p and positions[o_amr] == next_step:
+                        swap = True
+                        break
+                if swap:
+                    moves[amr] = p
+                    reserved.add(p)
+                else:
+                    moves[amr] = next_step
+                    reserved.add(next_step)
+            
+            # Identify deadlocks where we wanted to move but couldn't
+            if moves[amr] == p and next_step != p:
+                s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
+                if s['blocked_ticks'] > 5 and m in ['moving_supply', 'moving_station', 'moving_base', 'idle']:
+                    
+                    if m == 'moving_base':
+                        # If we are just returning to base, and we are blocking traffic, 
+                        # just pick a completely random free tile far away from the middle to park at instead!
+                        possible_dodges = []
+                        for dy in [0, 1, 8, 9]:
+                            for dx in range(0, GRID_MAX_X + 1):
+                                dpos = (dx, dy)
+                                if dpos not in OBSTACLES:
+                                    possible_dodges.append(dpos)
+                        if possible_dodges:
+                            s['goal'] = random.choice(possible_dodges)
+                            s['blocked_ticks'] = 0
+                    else:
+                        possible_dodges = []
+                        for dy in range(-3, 4):
+                            for dx in range(-3, 4):
+                                dpos = (p[0]+dx, p[1]+dy)
+                                if _is_within_bounds(dpos) and dpos not in OBSTACLES:
+                                    possible_dodges.append(dpos)
+                        if possible_dodges:
+                            # Pick a random clear tile nearby as a temporary dodge goal
+                            s['dodge_goal'] = random.choice(possible_dodges)
+                            s['dodge_ticks'] = 15  # pursue this dodge goal for 15 ticks
+            else:
+                s['blocked_ticks'] = 0
+                    
+        # Apply moves and Evaluate arrivals
+        for amr in AMR_KEYS:
+            positions[amr] = moves[amr]
+            if need_log and moves[amr] != path_logs[amr][-1]:
+                path_logs[amr].append(moves[amr])
+                
+            s = amr_states[amr]
+            p = positions[amr]
+            
+            if s['mode'] == 'moving_supply' and p == s['goal']:
+                mat = s['job'].type_
+                inventory[amr][mat] = 3
+                if need_log:
+                    timelines.append((amr, s.get('route_start', t), t, "supply", f"Replenish {mat}"))
+                s['mode'] = 'idle'
+                
+            elif s['mode'] == 'moving_station' and p == s['goal']:
+                if not station_occupied[s['job'].station]:
+                    station_occupied[s['job'].station] = True
+                    s['mode'] = 'processing'
+                    s['proc_ticks'] = s['job'].duration
+                    if need_log:
+                        dur = t - s.get('route_start', t)
+                        if dur > 0: timelines.append((amr, s['route_start'], t, "travel", f"Job{s['job'].idx} trans {dur}s"))
+                
+            elif s['mode'] == 'moving_base' and p == s['goal']:
+                s['mode'] = 'idle'
+                if need_log:
+                    dur = t - s.get('route_start', t)
+                    if dur > 0: timelines.append((amr, s['route_start'], t, "return", f"Return {dur}s"))
+
+        # End of tick
+        t += 1
+        
+    avail = {a: float(t) for a in AMR_KEYS}
+    return avail, timelines, queue_infos, path_logs, invalid_jobs_count
+
+
+def fitness(individual: Individual, jobs: List[Job], check_collision: bool = False, init_state: dict = None) -> Tuple[float, List[Tuple]]:
+    availability, timeline, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
+    makespan = max(availability.values()) - (init_state["time"] if init_state else 0)
+    #sum of all AMR finish time offset by init_score
+    total_active_time = sum([ans - (init_state["time"] if init_state else 0) for ans in availability.values()])
     # Fitness=Makespan + (alpha * TotalActiveTime) ,alpha=0.001
     # Primary consider the makespan, secondary consider the total load balance 
     weighted_score = makespan + (0.001 * total_active_time)
@@ -525,6 +786,7 @@ def greedy_individual(jobs: List[Job]) -> Individual:
 def order_crossover(parent_a: Individual, parent_b: Individual, jobs: List[Job]) -> Individual:
     # Take a random segment from parent A [a:b).Place this segment unchanged into the child's position.Fill in the remaining positions in the order of parent B.
     size = len(parent_a.order)
+    if size < 2: return Individual(order=list(parent_a.order), amr_assignment=list(parent_a.amr_assignment))
     a, b = sorted(random.sample(range(size), 2))
     child_order = [-1] * size
     child_order[a:b] = parent_a.order[a:b]
@@ -544,8 +806,8 @@ def order_crossover(parent_a: Individual, parent_b: Individual, jobs: List[Job])
     return Individual(order=clustered_order, amr_assignment=child_assign)
 
 # Moves a job from the busiest AMR to the idlest AMR.
-def smart_load_balance_mutate(individual: Individual, jobs: List[Job]):
-    availability, _, _, _, _ = decode_schedule(individual, jobs, need_log=False, check_collision=False) 
+def smart_load_balance_mutate(individual: Individual, jobs: List[Job], init_state: dict = None):
+    availability, _, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=False, init_state=init_state)
     busiest_amr = max(availability, key=availability.get) # find the busiest amr
     idlest_amr = min(availability, key=availability.get)  # find the idlest amr
     if busiest_amr == idlest_amr: return
@@ -555,8 +817,14 @@ def smart_load_balance_mutate(individual: Individual, jobs: List[Job]):
         victim_job = random.choice(busy_job_indices)
         individual.amr_assignment[victim_job] = idlest_amr
 
-def mutate(individual: Individual, jobs: List[Job]) -> None:
+def mutate(individual: Individual, jobs: List[Job], init_state: dict = None) -> None:
     size = len(individual.order)
+    if size < 2: 
+        # Only allow AMR reassignment for single job
+        if size == 1 and random.random() < MUTATION_RATE:
+            individual.amr_assignment[0] = random.choice(AMR_KEYS)
+        return
+        
     # Swap the positions of the two jobs
     if random.random() < MUTATION_RATE:
         i, j = random.sample(range(size), 2)
@@ -580,13 +848,15 @@ def mutate(individual: Individual, jobs: List[Job]) -> None:
                 break
     # Load Balance
     if random.random() < MUTATION_RATE:
-        smart_load_balance_mutate(individual, jobs)
+        smart_load_balance_mutate(individual, jobs, init_state=init_state)
 
-def local_improve(individual: Individual, jobs: List[Job], max_iters: int = routing_iters, check_collision: bool = False) -> Individual:
+def local_improve(individual: Individual, jobs: List[Job], max_iters: int = routing_iters, check_collision: bool = False, init_state: dict = None) -> Individual:
     current = Individual(order=list(individual.order), amr_assignment=list(individual.amr_assignment))
-    best_score, _ = fitness(current, jobs, check_collision=check_collision) # Current best fitness
     job_count = len(current.order)
-    availability, _, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
+    if job_count < 2: return current
+    
+    best_score, _ = fitness(current, jobs, check_collision=check_collision, init_state=init_state) # Current best fitness
+    availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
     critical_amr = max(availability, key=availability.get) # AMR with the longest makespan
     for _ in range(max_iters):
         # Each time, randomly select two job_i and job_j and try to swap them.One of them needs to belong to the critical AMR.
@@ -598,13 +868,13 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
             new_order = list(current.order)
             new_order[i], new_order[j] = new_order[j], new_order[i]
             neighbor = Individual(order=new_order, amr_assignment=list(current.amr_assignment))
-            score, _ = fitness(neighbor, jobs, check_collision=check_collision)
+            score, _ = fitness(neighbor, jobs, check_collision=check_collision, init_state=init_state)
             # Only accept the neighbor if it improves the fitness
             if score < best_score:
                 current = neighbor
                 best_score = score
                 improved = True
-                availability, _, _, _, _ = decode_schedule(current, jobs, need_log=False, check_collision=check_collision)
+                availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
                 critical_amr = max(availability, key=availability.get)
         if not improved:
             # Find consecutive blocks with the same AMR and type in the current order.Randomly select one block.Move the entire block to another location.
@@ -616,7 +886,7 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
                 insert_pos = random.randint(0, len(remainder))
                 new_order = remainder[:insert_pos] + block + remainder[insert_pos:]
                 neighbor = Individual(order=new_order, amr_assignment=list(current.amr_assignment))
-                score, _ = fitness(neighbor, jobs, check_collision=check_collision)
+                score, _ = fitness(neighbor, jobs, check_collision=check_collision, init_state=init_state)
                 if score < best_score:
                     current = neighbor
                     best_score = score
@@ -629,7 +899,7 @@ def get_parent_via_tournament(population_scored, k=3):
     winner = min(candidates, key=lambda x: x[0])
     return winner[1]
 
-def evolve(jobs: List[Job]) -> Tuple[Individual, List[Tuple]]:
+def evolve(jobs: List[Job], init_state: dict = None) -> Tuple[Individual, List[Tuple]]:
     # Initial Population = 80% random group + 20% greedy group
     pop_random_count = int(POPULATION_SIZE * 0.8)
     population = [random_individual(jobs) for _ in range(pop_random_count)]
@@ -643,14 +913,14 @@ def evolve(jobs: List[Job]) -> Tuple[Individual, List[Tuple]]:
     for gen in range(GENERATIONS):
         scored = []
         for ind in population:
-            m, _ = fitness(ind, jobs)
+            m, _ = fitness(ind, jobs, init_state=init_state)
             scored.append((m, ind))
         scored.sort(key=lambda pair: pair[0])
         current_best = scored[0][1]
         f_val = scored[0][0]
         if f_val < best_fitness:
             best_fitness = f_val
-            best_timeline = fitness(current_best, jobs)[1]
+            best_timeline = fitness(current_best, jobs, init_state=init_state)[1]
             archive_best = current_best
             stagnation_counter = 0
         else:
@@ -670,21 +940,21 @@ def evolve(jobs: List[Job]) -> Tuple[Individual, List[Tuple]]:
             parent_a = get_parent_via_tournament(scored, k=3)
             parent_b = get_parent_via_tournament(scored, k=3)
             child = order_crossover(parent_a, parent_b, jobs)
-            mutate(child, jobs)
+            mutate(child, jobs, init_state=init_state)
             new_generation.append(child)
 
         population = new_generation
 
-    archive_best = local_improve(archive_best, jobs, max_iters=routing_iters)
+    archive_best = local_improve(archive_best, jobs, max_iters=routing_iters, init_state=init_state)
     
     if collision_routing_iters > 0:
-        archive_best = local_improve(archive_best, jobs, max_iters=collision_routing_iters, check_collision=True)
+        archive_best = local_improve(archive_best, jobs, max_iters=collision_routing_iters, check_collision=True, init_state=init_state)
         
-    makespan, timeline = fitness(archive_best, jobs, check_collision=True)
+    makespan, timeline = fitness(archive_best, jobs, check_collision=True, init_state=init_state)
     return archive_best, timeline
 
 
-def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs: List[Job] = None, solve_time: float = None, invalid_count: int = 0) -> None:
+def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs: List[Job] = None, solve_time: float = None, invalid_count: int = 0, show_gantt: bool = True, save_img: str = None) -> None:
     AMR_COUNT = len(AMR_STARTS)
     AX_Y_MIN, AX_Y_MAX = 0.0, 2.0
     BOTTOM_MIN = 0.0
@@ -742,8 +1012,15 @@ def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs
             text_color = "white"
             try:
                 parts = label.split(" ")
-                jid = parts[0].replace("Job", "J_")
+                jid_str = parts[0].replace("Job", "")
+                jid = f"J{jid_str}"
                 dur = parts[1].split("(")[1].replace("s)", "")
+                station_str = ""
+                if jobs:
+                    j_idx = int(jid_str)
+                    job_map = {j.idx: j.station for j in jobs}
+                    if j_idx in job_map:
+                        station_str = f"\n{job_map[j_idx]}"
                 display_label = f"{jid}\n({dur})"
             except:
                 pass
@@ -783,7 +1060,7 @@ def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs
             r = Rectangle((current_x, queue_y_center - queue_h / 2), width, queue_h,
                           facecolor=face, edgecolor="black", linewidth=1.2, zorder=5)
             ax.add_patch(r)
-            ax.text(current_x + width / 2, queue_y_center, f"J_{job_idx}", 
+            ax.text(current_x + width / 2, queue_y_center, f"J{job_idx}", 
                     ha="center", va="center", color="white", fontsize=9, weight="bold", zorder=6)
             current_x += width
     ax.set_xlabel("Time (s)", fontweight="bold")
@@ -800,7 +1077,13 @@ def plot_gantt(timeline: List[Tuple], queue_infos: List[Tuple[int, float]], jobs
     ax.legend(handles=handles, loc="upper right", frameon=True, bbox_to_anchor=(1.0, 1.0))
     plt.tight_layout()
     plt.subplots_adjust(left=0.05)
-    plt.show()
+    if save_img:
+        plt.savefig(save_img, dpi=300, bbox_inches='tight')
+        print(f"Saved Gantt chart to {save_img}")
+    if show_gantt:
+        plt.show()
+    else:
+        plt.close(fig)
 # Data Loading & Execution 
 def station_key_from_value(raw_station: Optional[str]) -> Optional[str]:
     if raw_station is None: return None
@@ -833,20 +1116,32 @@ def make_jobs() -> List[Job]:
         station = random.choice(stations)
         jobs.append(Job(idx=idx, type_=type_, duration=TYPE_DURATION[type_], station=station))
     return jobs
-def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False) -> Tuple[float, float]:
-    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule(individual, jobs, need_log=True, check_collision=True)
+def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False, save_img: str = None) -> Tuple[float, float]:
+    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule_tick_by_tick(individual, jobs, need_log=True, check_collision=True)
     makespan = max(availability.values())
     print(f"Optimal Makespan Found: {makespan:.2f}s")
     print(f"Invalid Jobs Count: {invalid_count}")
     if solve_time is not None:
         print(f"Computation Time: {solve_time:.4f}s")
-    if show_gantt:
-        plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count)
+    if show_gantt or save_img:
+        plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count, show_gantt=show_gantt, save_img=save_img)
     return makespan, solve_time
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gantt", action="store_true", help="Plot Gantt Chart")
+    parser.add_argument("--inbox", type=str, default="", help="Path to dispatch inbox JSONL file")
+    parser.add_argument("--save_img", type=str, default="", help="Save the schedule Gantt chart to this file (e.g., schedule.png)")
+    args = parser.parse_args()
+
     random.seed(42)
-    dispatch_events = load_dispatch_events()
+    
+    if args.inbox:
+        dispatch_events = load_dispatch_events(Path(args.inbox))
+    else:
+        dispatch_events = load_dispatch_events()
+        
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
     
     output_filename = "GA_summary_results.csv"
@@ -861,7 +1156,9 @@ if __name__ == "__main__":
             start_time = time.perf_counter()
             best_ind, _ = evolve(event["jobs"])
             solve_dur = time.perf_counter() - start_time
-            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur, show_gantt=False)
+            
+            img_path = f"{args.save_img.split('.')[0]}_{event['index']}.png" if args.save_img else None
+            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur, show_gantt=args.gantt, save_img=img_path)
             results_data.append([event['index'], f"{makespan:.2f}", f"{computation_time:.4f}" if computation_time is not None else "0.0000"])
     else:
         print("No dispatch file found. Generating random jobs...")
@@ -869,7 +1166,9 @@ if __name__ == "__main__":
         start_time = time.perf_counter()
         best_ind, _ = evolve(jobs)
         solve_dur = time.perf_counter() - start_time
-        makespan, computation_time = describe_solution(best_ind, jobs, solve_time=solve_dur, show_gantt=True)
+        
+        img_path = args.save_img if args.save_img else None
+        makespan, computation_time = describe_solution(best_ind, jobs, solve_time=solve_dur, show_gantt=args.gantt, save_img=img_path)
         results_data.append(["random", f"{makespan:.2f}", f"{computation_time:.4f}" if computation_time is not None else "0.0000"])
 
     if results_data:
@@ -878,3 +1177,4 @@ if __name__ == "__main__":
             writer.writerow(["Event_Index", "Makespan", "Computation_Time"])
             writer.writerows(results_data)
         print(f"\nSummary results saved to {output_filename}")
+
