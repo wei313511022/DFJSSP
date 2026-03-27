@@ -404,7 +404,7 @@ class GridEnv:
                             if 0 <= aid < len(self.amrs):
                                 self.amrs[aid].local_queue.append(jid)
                     
-                    compute_time = time.perf_counter() - start_cpu_time
+                    compute_time = (time.perf_counter() - start_cpu_time)
                     self.last_ga_compute_time = compute_time
 
                     # ✅ update reschedule gate correctly (after a real schedule)
