@@ -352,6 +352,8 @@ if __name__ == "__main__":
     parser.add_argument("--gantt", action="store_true", help="Plot Gantt Chart")
     parser.add_argument("--inbox", type=str, default="", help="Path to dispatch inbox JSONL file")
     parser.add_argument("--save_img", type=str, default="", help="Save the schedule Gantt chart to this file (e.g., schedule.png)")
+    parser.add_argument("--collision_iters", type=int, default=collision_routing_iters, help="Number of collision routing iterations")
+    parser.add_argument("--output_csv", type=str, default="GNN_summary_results.csv", help="Output CSV filename")
     args = parser.parse_args()
     
     # 1. Setup environment and seed 
@@ -374,7 +376,7 @@ if __name__ == "__main__":
         dispatch_events = load_dispatch_events()
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
     
-    output_filename = "GNN_summary_results.csv"
+    output_filename = args.output_csv
     results_data = []
 
     print("=== Using GNN Logic ===")
@@ -392,8 +394,8 @@ if __name__ == "__main__":
             # b. Apply Local Improve for routing/collision adjustment exactly identically to GA.py
             improve_start = time.perf_counter()
             best_ind = local_improve(best_ind, event["jobs"], max_iters=routing_iters)
-            if collision_routing_iters > 0:
-                best_ind = local_improve(best_ind, event["jobs"], max_iters=collision_routing_iters, check_collision=True)
+            if args.collision_iters > 0:
+                best_ind = local_improve(best_ind, event["jobs"], max_iters=args.collision_iters, check_collision=True)
             solve_dur_ns += (time.perf_counter() - improve_start)
             
             # c. Evaluate with Exact GA routing logic
@@ -411,8 +413,8 @@ if __name__ == "__main__":
         # b. Apply Local Improve for routing/collision adjustment exactly identically to GA.py
         improve_start = time.perf_counter()
         best_ind = local_improve(best_ind, jobs, max_iters=routing_iters)
-        if collision_routing_iters > 0:
-            best_ind = local_improve(best_ind, jobs, max_iters=collision_routing_iters, check_collision=True)
+        if args.collision_iters > 0:
+            best_ind = local_improve(best_ind, jobs, max_iters=args.collision_iters, check_collision=True)
         solve_dur_ns += (time.perf_counter() - improve_start)
         
         # c. Evaluate with Exact GA routing logic

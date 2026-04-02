@@ -17,29 +17,37 @@ AMR_STARTS = {
     "AMR1": (2, 7),
     "AMR2": (2, 4),
     "AMR3": (2, 1),
+    # "AMR4": (2, 10),
+    # "AMR5": (2, 13),
+    # "AMR6": (2, 16),
+    # "AMR7": (2, 19),
 }
 AMR_KEYS = list(AMR_STARTS.keys())
 STATIONS = {
-    "station1": (9, 8),
-    "station2": (9, 6),
-    "station3": (9, 4),
-    "station4": (9, 2),
-    "station5": (9, 0),
+    "station1": (18, 16),
+    "station2": (18, 12),
+    "station3": (18, 8),
+    "station4": (18, 4),
+    "station5": (18, 0),
 }
 OBSTACLES = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3),
+    (10, 2), (10, 3), (10, 4), (10, 10), (10, 11), (10, 12), (10, 13), (10, 18), (10, 19),
+    (11, 2), (11, 3), (11, 4), (11, 10), (11, 11), (11, 12), (11, 13), (11, 18), (11, 19),
+    (15, 6), (15, 7), (15, 8), (15, 9), (15, 14), (15, 15), (15, 16), (15, 17),
+    (16, 6), (16, 7), (16, 8), (16, 9), (16, 14), (16, 15), (16, 16), (16, 17)
 }
 BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
 SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
 _GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES) + list(SUPPLY_LOCATIONS.values())
-GRID_MIN_X = min(p[0] for p in _GRID_POINTS)
-GRID_MAX_X = max(p[0] for p in _GRID_POINTS)
-GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
-GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
+GRID_MIN_X = 0
+GRID_MAX_X = 20
+GRID_MIN_Y = 0
+GRID_MAX_Y = 20
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_80.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        

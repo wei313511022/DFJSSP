@@ -20,19 +20,26 @@ def load_agent(path):
     return agent
 
 def episode_metrics(env):
-    done = len(env.completed_jobs)
-    if done == 0:
-        return done, 1000.0, 1000.0
+    total_jobs = len(getattr(env, "completed_jobs", [])) + len(getattr(env, "active_jobs", [])) + len(getattr(env, "queue", []))
+
+    if total_jobs == 0:
+        return 0.0, 1000.0, 1000.0
+
+    finished_in_500 = sum(1 for j in env.completed_jobs if getattr(j, "finish_ts", 1000.0) <= 500.0)
+    done_pct = (finished_in_500 / total_jobs) * 100.0
 
     flows = [j.finish_ts - j.arrival_ts for j in env.completed_jobs if j.finish_ts >= 0]
     flow = float(np.mean(flows)) if flows else 1000.0
 
     # Makespan: last completion - first arrival (completed set)
-    first_arr = min(j.arrival_ts for j in env.completed_jobs)
-    last_fin  = max(j.finish_ts  for j in env.completed_jobs)
-    mk = float(last_fin - first_arr)
+    if env.completed_jobs:
+        first_arr = min(j.arrival_ts for j in env.completed_jobs)
+        last_fin  = max(j.finish_ts  for j in env.completed_jobs)
+        mk = float(last_fin - first_arr)
+    else:
+        mk = 1000.0
 
-    return done, flow, mk
+    return done_pct, flow, mk
 
 def snapshot_env(env):
     """Return (active_ids, queue_len, done_ids)."""
@@ -212,16 +219,17 @@ def run_test(model_path, output_csv):
     env = GridEnv()
     agent = load_agent(model_path)
 
-    TEST_EPISODES = len(env.episodes)
+    # TEST_EPISODES = len(env.episodes)
+    TEST_EPISODES = 10
     FIX_PERIOD = 1.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv
     csv_file = open(csv_filename, "w", newline="")
     writer = csv.writer(csv_file)
-    writer.writerow(["Episode", "AI_Done", "Fix_Done", "AI_Flow", "Fix_Flow", "AI_Makespan", "Fix_Makespan", "AI_GA_Time", "Fix_GA_Time", "Winner"])
+    writer.writerow(["Episode", "AI_Done(%)", "Fix_Done(%)", "AI_Flow", "Fix_Flow", "AI_Makespan", "Fix_Makespan", "AI_GA_Time", "Fix_GA_Time", "Winner"])
 
-    print("\nEp   | AI Done Fix Done | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner")
+    print("\nEp   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner")
     print("-" * 120)
 
     ai_flows, fix_flows = [], []
@@ -270,7 +278,7 @@ def run_test(model_path, output_csv):
                 # flow 也一樣，比 GA overhead
                 win = "AI" if ai_ga_ms < fix_ga_ms else "Fix"
 
-        print(f"{ep:<4} | {ai_done:<6} {fix_done:<7} | {ai_flow:<7.1f} {fix_flow:<8.1f} | "
+        print(f"{ep:<4} | {ai_done:<10.1f} {fix_done:<11.1f} | {ai_flow:<7.1f} {fix_flow:<8.1f} | "
               f"{ai_mk:<7.1f} {fix_mk:<8.1f} | {ai_ga_ms:<9.1f} {fix_ga_ms:<9.1f} | {win}")
 
         writer.writerow([ep, ai_done, fix_done, ai_flow, fix_flow, ai_mk, fix_mk, ai_ga_ms, fix_ga_ms, win])
@@ -305,7 +313,7 @@ def run_test(model_path, output_csv):
     print("-" * 80)
     
     for name, key_ai, key_fix in [
-        ("Done Jobs", "ai_done", "fix_done"),
+        ("Done Jobs (%)", "ai_done", "fix_done"),
         ("Flow Time", "ai_flow", "fix_flow"),
         ("Makespan", "ai_mk", "fix_mk"),
         ("GA Time (s)", "ai_ga", "fix_ga")
@@ -318,10 +326,10 @@ def run_test(model_path, output_csv):
     print("="*80)
     summary_file.close()
     print(f"Summary table saved to {summary_filename}")
-
+  
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
-    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth", help="Path to the model file")
+    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v7/gnn_ddqn_model_v7_ep400.pth", help="Path to the model file")
     parser.add_argument("--output", type=str, default="gnn_ddqn_model_v7/benchmark_results.csv", help="Path to the output CSV file")
     parser.add_argument("--module", type=str, default="GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()
@@ -335,7 +343,7 @@ if __name__ == "__main__":
         print(f"Error importing module {args.module}: {e}")
         sys.exit(1)
 
-    CONFIG['DATASET_PATH'] = "test_dataset.jsonl"
+    CONFIG['DATASET_PATH'] = "test_dataset_r2.jsonl"
     CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     run_test(args.model, args.output)

@@ -41,7 +41,7 @@ from GNN import SchedulerGNN, solve_with_gnn
 # ==========================================
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'DATASET_PATH': 'training_dataset.jsonl',
+    'DATASET_PATH': 'training_dataset_r2.jsonl',
     'SAVE_PATH': 'gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth',
     
     # Physics
@@ -66,15 +66,15 @@ CONFIG = {
     'AMR_IN_DIM': 8, 
     'JOB_IN_DIM': 10, 
     'QUEUE_DIM': 4, 
-    'HIDDEN_DIM': 128,
+    'HIDDEN_DIM': 256,
     'GNN_LAYERS': 2,
     'ACTION_DIM': 2,    # 0: Wait, 1: Release
     
     # GA Hyperparameters
     'GA_POP_SIZE': 200,       # Increased from 50
     'GA_GENERATIONS': 150,    # Increased from 100
-    'GA_ROUTING_ITERS': 1000,
-    'GA_COLLISION_ITERS': 2000,
+    'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
+    'GA_COLLISION_ITERS': 2000,  # Disabled for RL training speed
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -438,6 +438,7 @@ class GridEnv:
         
         self.active_jobs = [] 
         self.completed_jobs = [] # <--- NEW: Metric Tracking
+        self.total_jobs = len(data['jobs']) # Store target to allow early termination
         
         self.sim = TickSimulator()
         self.sim_time = 0.0
@@ -451,9 +452,10 @@ class GridEnv:
         cooldown_ok = (self.sim_time - self.last_resched_t) >= RESCHED_COOLDOWN
         has_unstarted = any(j.status == 1 for j in self.active_jobs)
         new_job_since_last = (self.arrival_version != self.last_resched_version)
-        new_completion_since_last = (len(self.completed_jobs) != self.last_resched_completion_count)
 
-        return cooldown_ok and has_unstarted and (new_job_since_last or new_completion_since_last)
+        # Only allow rescheduling if a new job has arrived, 
+        # because the GA already queues jobs optimally.
+        return cooldown_ok and has_unstarted and new_job_since_last
 
     def get_action_mask(self):
         return [1.0, 1.0 if self.can_reschedule() else 0.0]
@@ -505,6 +507,7 @@ class GridEnv:
         # -------------------------------
         # 2) Apply action (reschedule)
         # -------------------------------
+        reschedule_executed = False
 
         if action == 1:
             if not self.can_reschedule():
@@ -514,6 +517,8 @@ class GridEnv:
                 if not unstarted:
                     reward -= EMPTY_RESCHED_PENALTY
                 else:
+                    reschedule_executed = True
+                    reward -= 0.5  # Small penalty to discourage RL from indefinitely spamming it
                     from GA import STATIONS, AMR_KEYS
                     pos_to_station = {v: k for k, v in STATIONS.items()}
                     
@@ -535,19 +540,37 @@ class GridEnv:
                     if collision_iters > 0:
                         best_ind = local_improve(best_ind, ga_jobs, max_iters=collision_iters, check_collision=True, init_state=init_state)
                     
-                    # assign schedules to AMRs
-                    self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
-                    
-                    compute_time = time.perf_counter() - start_cpu_time
+                    compute_time = (time.perf_counter() - start_cpu_time)
                     self.last_ga_compute_time = compute_time
 
-                    self.last_resched_t = self.sim_time
+                    # ========================================================
+                    # Fix time paradox: AMRs finish current job & wait 
+                    # during compute time, then get the new schedule.
+                    # ========================================================
+                    dt = int(math.ceil(max(1.0, compute_time)))
+                    
+                    # 1. Freeze unstarted jobs
+                    for amr in AMR_KEYS:
+                        active_job = self.sim.amr_states[amr]['job']
+                        self.sim.amr_queues[amr].clear()
+                        if active_job is not None:
+                            self.sim.amr_queues[amr].append(active_job)
+                            
+                    # 2. Simulate the world while CPU was calculating (AMRs finish current, then idle)
+                    self.sim.step(dt)
+                    
+                    # 3. Inject new schedule AFTER calculation delay
+                    self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
+
+                    self.last_resched_t = float(self.sim.t)
                     self.last_resched_version = getattr(self, "arrival_version", 0)
                     self.last_resched_completion_count = len(self.completed_jobs)
 
-        # 3) Execute AMR tasks & advance time
-        dt = int(math.ceil(max(1.0, compute_time)))
-        self.sim.step(dt)
+        # 3) Execute AMR tasks & advance time (if no reschedule happened)
+        if not reschedule_executed:
+            dt = int(math.ceil(max(1.0, compute_time)))
+            self.sim.step(dt)
+            
         self.sim_time = float(self.sim.t)
         
         # Sync active jobs (status=2) from simulator
@@ -577,7 +600,7 @@ class GridEnv:
         if done_now > 0:
             reward += DONE_REWARD * done_now
             
-        done = (self.sim_time >= CONFIG['SIM_TIME'])
+        done = (self.sim_time >= CONFIG['SIM_TIME']) or (len(self.completed_jobs) >= self.total_jobs)
         return self.get_state_arrays(), reward, done, float(dt)
 
 
@@ -731,7 +754,10 @@ def collate_batch(batch_list):
             if L > 0:
                 tens = torch.tensor(j_list, dtype=torch.float32, device=CONFIG['DEVICE'])
                 b_job[i, :L, :] = tens
-                b_mask[i, :L, :] = 1.0
+                if j_list[0][0] == 0.0:
+                    b_mask[i, :L, :] = 0.0
+                else:
+                    b_mask[i, :L, :] = 1.0
                 
         return b_amr, b_job, b_q, b_mask
 
