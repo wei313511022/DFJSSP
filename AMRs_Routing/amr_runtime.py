@@ -31,10 +31,11 @@ SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"
 GRID_W, GRID_H = 10, 10
 
 START_POS:  Dict[int, Tuple[int, int]] = {
-    
-    3: (2.0, 1.0),
-    2: (2.0, 4.0),
-    1: (2.0, 7.0),
+    5: (2.0, 1.0),
+    4: (2.0, 3.0),
+    3: (2.0, 5.0),
+    2: (2.0, 7.0),
+    1: (2.0, 9.0),
 }
 
 # Production stations (right side).
@@ -64,8 +65,7 @@ ALL_STATIONS: Set[Tuple[int, int]] = {
 
 # Optional: static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3)
-    
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1)
 }
 
 
@@ -77,11 +77,11 @@ UPDATE_INTERVAL_MS = 200         # timer tick in ms
 SIM_SPEED_MULT     = 1.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
-AMR_COUNT = 3                    # number of AMRs
+AMR_COUNT = 5                    # number of AMRs
 
 # Each AMR can carry up to this many units of each material type
-MATERIAL_CAPACITY = 1
-REFILL_CAPACITY = 10
+MATERIAL_CAPACITY = 3
+REFILL_CAPACITY = 3
 
 Coord = Tuple[int, int]
 
@@ -759,6 +759,8 @@ def create_amrs(ax) -> Dict[int, AMRState]:
         1: "tab:red",
         2: "tab:green",
         3: "tab:purple",
+        4: "tab:orange",
+        5: "tab:brown",
     }
 
     for i in range(1, AMR_COUNT + 1):
@@ -770,6 +772,7 @@ def create_amrs(ax) -> Dict[int, AMRState]:
             nxt_posx=x + 1,
             nxt_posy=y,
             route_color=color_map.get(i, "black"),
+            blocked=True,
         )
         mk = Circle(
             (x, y),
