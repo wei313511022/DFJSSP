@@ -25,8 +25,8 @@ def episode_metrics(env):
     if total_jobs == 0:
         return 0.0, 1000.0, 1000.0
 
-    finished_in_500 = sum(1 for j in env.completed_jobs if getattr(j, "finish_ts", 1000.0) <= 500.0)
-    done_pct = (finished_in_500 / total_jobs) * 100.0
+    finished_in = sum(1 for j in env.completed_jobs if getattr(j, "finish_ts", 1000.0) <= CONFIG['SIM_TIME'])
+    done_pct = (finished_in / total_jobs) * 100.0
 
     flows = [j.finish_ts - j.arrival_ts for j in env.completed_jobs if j.finish_ts >= 0]
     flow = float(np.mean(flows)) if flows else 1000.0
@@ -329,7 +329,7 @@ def run_test(model_path, output_csv):
   
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
-    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v7/gnn_ddqn_model_v7_ep400.pth", help="Path to the model file")
+    parser.add_argument("--model", type=str, default="gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth", help="Path to the model file")
     parser.add_argument("--output", type=str, default="gnn_ddqn_model_v7/benchmark_results.csv", help="Path to the output CSV file")
     parser.add_argument("--module", type=str, default="GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()

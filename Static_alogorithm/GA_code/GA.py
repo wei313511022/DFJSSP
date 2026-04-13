@@ -39,7 +39,7 @@ GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_80.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        

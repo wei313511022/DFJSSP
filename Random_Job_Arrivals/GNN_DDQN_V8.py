@@ -42,7 +42,7 @@ from GNN import SchedulerGNN, solve_with_gnn
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'DATASET_PATH': 'training_dataset_r2.jsonl',
-    'SAVE_PATH': 'gnn_ddqn_model_v6/gnn_ddqn_model_v6.pth',
+    'SAVE_PATH': 'gnn_ddqn_model_v8/gnn_ddqn_model_v8.pth',
     
     # Physics
     'GRID_WIDTH': 10,
@@ -57,7 +57,7 @@ CONFIG = {
     'BATCH_SIZE': 64,
     'GAMMA': 0.99,
     'LR': 3e-4,
-    'FLOW_PENALTY': 0,
+    'FLOW_PENALTY': 0.001,
     'EPS_START': 1.0,
     'EPS_END': 0.05,
     'EPS_DECAY': 200,
@@ -66,15 +66,15 @@ CONFIG = {
     'AMR_IN_DIM': 8, 
     'JOB_IN_DIM': 10, 
     'QUEUE_DIM': 4, 
-    'HIDDEN_DIM': 128,
+    'HIDDEN_DIM': 256,
     'GNN_LAYERS': 2,
     'ACTION_DIM': 2,    # 0: Wait, 1: Release
     
     # GA Hyperparameters
     'GA_POP_SIZE': 200,       # Increased from 50
     'GA_GENERATIONS': 150,    # Increased from 100
-    'GA_ROUTING_ITERS': 1000,
-    'GA_COLLISION_ITERS': 2000,
+    'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
+    'GA_COLLISION_ITERS': 2000,  # Disabled for RL training speed
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -162,6 +162,243 @@ class AMR:
     current_job: int = -1
 
 
+
+# ==========================================
+# 3. TICK-BY-TICK SIMULATOR (Identical to GA Collision-Free Routing)
+# ==========================================
+class TickSimulator:
+    def __init__(self):
+        from GA import AMR_STARTS, TYPE_DURATION, STATIONS, SUPPLY_LOCATIONS
+        self.t = 0
+        self.positions = {amr: AMR_STARTS[amr] for amr in AMR_STARTS}
+        self.inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_STARTS}
+        if "AMR1" in self.inventory: self.inventory["AMR1"]["A"] = 3
+        if "AMR2" in self.inventory: self.inventory["AMR2"]["B"] = 3
+        if "AMR3" in self.inventory: self.inventory["AMR3"]["C"] = 3
+        self.amr_states = {amr: {'mode': 'idle', 'goal': None, 'job': None, 'proc_ticks': 0} for amr in AMR_STARTS}
+        self.amr_queues = {amr: deque() for amr in AMR_STARTS}
+        self.station_occupied = {s: False for s in STATIONS}
+        self.completed_jobs_jids = []
+
+    def assign_schedules(self, order, amr_assignment, job_map):
+        # Clear queues (but leave the ACTIVE job alone!)
+        for amr in self.amr_queues:
+            active_job = self.amr_states[amr]['job']
+            self.amr_queues[amr].clear()
+            if active_job is not None:
+                self.amr_queues[amr].append(active_job)
+            
+        for job_idx, amr in zip(order, amr_assignment):
+            jdata = job_map[job_idx] # {'jid', 'jtype', 'time', 'station'}
+            # Map into a Job-like object
+            import GA
+            ga_job = GA.Job(idx=jdata['jid'], type_=jdata['jtype'], station=f"station{jdata['station']}", duration=jdata['time'])
+            self.amr_queues[amr].append(ga_job)
+
+    def get_gnn_init_state(self) -> dict:
+        from GA import STATIONS, SUPPLY_LOCATIONS, shortest_path
+        state = {
+            "time": self.t,
+            "positions": {},
+            "availability": {},
+            "inventory": {amr: self.inventory[amr].copy() for amr in self.inventory}
+        }
+        for amr, s in self.amr_states.items():
+            if s['job'] is not None:
+                dest = STATIONS[s['job'].station]
+                state['positions'][amr] = dest
+                
+                # Math projection for availability
+                if s['mode'] in ['processing', 'processing_old']:
+                    time_left = s['proc_ticks']
+                elif s['mode'] == 'moving_station':
+                    path = shortest_path(self.positions[amr], dest)
+                    time_left = len(path) - 1 + s['job'].duration
+                elif s['mode'] == 'moving_supply':
+                    mat = s['job'].type_
+                    sup = SUPPLY_LOCATIONS[mat]
+                    path1 = shortest_path(self.positions[amr], sup)
+                    path2 = shortest_path(sup, dest)
+                    time_left = (len(path1) - 1) + (len(path2) - 1) + s['job'].duration
+                else:
+                    time_left = 0
+
+                state['availability'][amr] = self.t + time_left
+                
+                # Inventory projection
+                if s['mode'] == 'moving_supply':
+                    state['inventory'][amr][s['job'].type_] = 2
+                else:
+                    state['inventory'][amr][s['job'].type_] = max(0, state['inventory'][amr][s['job'].type_] - 1)
+            else:
+                state['positions'][amr] = self.positions[amr]
+                state['availability'][amr] = self.t
+        return state
+
+    def step(self, dt: int):
+        from GA import AMR_KEYS, SUPPLY_LOCATIONS, STATIONS, AMR_STARTS, shortest_path, OBSTACLES, _is_within_bounds
+        import random
+        # Extrapolate forward by exactly dt ticks
+        for _ in range(dt):
+            # 1. Transitions
+            for amr in AMR_KEYS:
+                s = self.amr_states[amr]
+                if s['mode'] == 'idle':
+                    if len(self.amr_queues[amr]) > 0:
+                        s['job'] = self.amr_queues[amr][0]
+                        mat = s['job'].type_
+                        if self.inventory[amr][mat] == 0:
+                            s['mode'] = 'moving_supply'
+                            s['goal'] = SUPPLY_LOCATIONS[mat]
+                        else:
+                            s['mode'] = 'moving_station'
+                            s['goal'] = STATIONS[s['job'].station]
+                    else:
+                        if self.positions[amr] != AMR_STARTS[amr]:
+                            s['mode'] = 'moving_base'
+                            s['goal'] = AMR_STARTS[amr]
+                            s['job'] = None
+                elif s['mode'] == 'processing':
+                    s['proc_ticks'] -= 1
+                    if s['proc_ticks'] <= 0:
+                        mat = s['job'].type_
+                        self.inventory[amr][mat] -= 1
+                        self.station_occupied[s['job'].station] = False
+                        self.completed_jobs_jids.append(s['job'].idx)
+                        self.amr_queues[amr].popleft()
+                        s['mode'] = 'idle'
+                        s['job'] = None
+                        s['goal'] = None
+            
+            # Additional Transition hook for immediately queued items
+            for amr in AMR_KEYS:
+                s = self.amr_states[amr]
+                if s['mode'] == 'idle':
+                    if len(self.amr_queues[amr]) > 0:
+                        s['job'] = self.amr_queues[amr][0]
+                        mat = s['job'].type_
+                        if self.inventory[amr][mat] == 0:
+                            s['mode'] = 'moving_supply'
+                            s['goal'] = SUPPLY_LOCATIONS[mat]
+                        else:
+                            s['mode'] = 'moving_station'
+                            s['goal'] = STATIONS[s['job'].station]
+                    else:
+                        if self.positions[amr] != AMR_STARTS[amr]:
+                            s['mode'] = 'moving_base'
+                            s['goal'] = AMR_STARTS[amr]
+                            s['job'] = None
+            
+            # 2. Movement Negotiation (Collision-Free Routing Logic directly from GA)
+            moves = {}
+            def prio(amr):
+                m = self.amr_states[amr]['mode']
+                if m in ['processing', 'processing_old']: return 100
+                if m == 'idle': return 10
+                if m == 'moving_station': return 50
+                if m == 'moving_supply': return 40
+                return 30
+                
+            ordered = sorted(AMR_KEYS, key=prio, reverse=True)
+            reserved = set()
+            
+            for amr in ordered:
+                m = self.amr_states[amr]['mode']
+                p = self.positions[amr]
+                
+                is_blocking_station = False
+                is_blocking_highway = False
+                if m == 'idle':
+                    for st_pos in STATIONS.values():
+                        if p == st_pos:
+                            is_blocking_station = True
+                            break
+                    if p[0] == 2:
+                        is_blocking_highway = True
+                        
+                if m in ['processing', 'processing_old']:
+                    moves[amr] = p
+                    reserved.add(p)
+                elif m == 'idle' and not is_blocking_station and not is_blocking_highway and p == self.amr_states[amr].get('goal', p):
+                    moves[amr] = p
+                    reserved.add(p)
+                elif m == 'moving_station' and p == self.amr_states[amr]['goal']:
+                    moves[amr] = p
+                    reserved.add(p)
+                    
+            for amr in ordered:
+                if amr in moves: continue
+                p = self.positions[amr]
+                s = self.amr_states[amr]
+                g = s['goal'] if s.get('goal') is not None else p
+                if s.get('dodge_ticks', 0) > 0:
+                    g = s['dodge_goal']
+                    s['dodge_ticks'] -= 1
+                    
+                path = shortest_path(p, g)
+                next_step = path[1] if len(path) > 1 else p
+                
+                if next_step in reserved:
+                    moves[amr] = p
+                    reserved.add(p)
+                else:
+                    swap = False
+                    for o_amr, o_next in moves.items():
+                        if o_next == p and self.positions[o_amr] == next_step:
+                            swap = True
+                            break
+                    if swap:
+                        moves[amr] = p
+                        reserved.add(p)
+                    else:
+                        moves[amr] = next_step
+                        reserved.add(next_step)
+                        
+                if moves[amr] == p and next_step != p:
+                    s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
+                    if s['blocked_ticks'] > 5 and s['mode'] in ['moving_supply', 'moving_station', 'moving_base', 'idle']:
+                        if s['mode'] == 'moving_base':
+                            possible_dodges = []
+                            for dy in [0, 1, 8, 9]:
+                                for dx in range(0, 20):
+                                    dpos = (dx, dy)
+                                    if dpos not in OBSTACLES: possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['goal'] = random.choice(possible_dodges)
+                                s['blocked_ticks'] = 0
+                        else:
+                            possible_dodges = []
+                            for dy in range(-3, 4):
+                                for dx in range(-3, 4):
+                                    dpos = (p[0]+dx, p[1]+dy)
+                                    if _is_within_bounds(dpos) and dpos not in OBSTACLES:
+                                        possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['dodge_goal'] = random.choice(possible_dodges)
+                                s['dodge_ticks'] = 15
+                else:
+                    s['blocked_ticks'] = 0
+                    
+            # 3. Apply moves
+            for amr in AMR_KEYS:
+                self.positions[amr] = moves[amr]
+                s = self.amr_states[amr]
+                p = self.positions[amr]
+                if s['mode'] == 'moving_supply' and p == s['goal']:
+                    mat = s['job'].type_
+                    self.inventory[amr][mat] = 3
+                    s['mode'] = 'idle'
+                elif s['mode'] == 'moving_station' and p == s['goal']:
+                    if not self.station_occupied[s['job'].station]:
+                        self.station_occupied[s['job'].station] = True
+                        s['mode'] = 'processing'
+                        s['proc_ticks'] = s['job'].duration
+                elif s['mode'] == 'moving_base' and p == s['goal']:
+                    s['mode'] = 'idle'
+                    
+            self.t += 1
+
+# ==========================================
 class GridEnv:
     def __init__(self):
         self.last_ga_compute_time = 0.0
@@ -201,10 +438,9 @@ class GridEnv:
         
         self.active_jobs = [] 
         self.completed_jobs = [] # <--- NEW: Metric Tracking
+        self.total_jobs = len(data['jobs']) # Store target to allow early termination
         
-        self.amrs = [
-            AMR(0, x=2, y=1), AMR(1, x=2, y=4), AMR(2, x=2, y=7)
-        ]
+        self.sim = TickSimulator()
         self.sim_time = 0.0
         
         self._release_arrived_jobs() # Ensure jobs at t=0 are visible in initial state
@@ -216,115 +452,22 @@ class GridEnv:
         cooldown_ok = (self.sim_time - self.last_resched_t) >= RESCHED_COOLDOWN
         has_unstarted = any(j.status == 1 for j in self.active_jobs)
         new_job_since_last = (self.arrival_version != self.last_resched_version)
-        new_completion_since_last = (len(self.completed_jobs) != self.last_resched_completion_count)
 
-        return cooldown_ok and has_unstarted and (new_job_since_last or new_completion_since_last)
+        # Only allow rescheduling if a new job has arrived, 
+        # because the GA already queues jobs optimally.
+        return cooldown_ok and has_unstarted and new_job_since_last
 
     def get_action_mask(self):
         return [1.0, 1.0 if self.can_reschedule() else 0.0]
 
 
     def calculate_current_makespan(self):
-        # 簡化估計：看目前所有忙碌 AMR 還要多久 + 尚未開始 jobs 的平均成本
-        busy = max([a.remaining_time for a in self.amrs], default=0.0)
+        busy = max([s['proc_ticks'] for s in self.sim.amr_states.values() if s['mode'] in ['processing', 'processing_old']], default=0.0)
         unstarted = [j for j in self.active_jobs if j.status == 1]
-        if not unstarted:
-            return max(busy, 1.0)
-
-        # 用 (dist to supply + dist supply->dest + proc) 當粗估
-        est_costs = []
-        for j in unstarted:
-            # 用最近 AMR 當估計起點
-            est = min(
-                GLOBAL_MAP.get_true_distance((a.x, a.y), j.supply_pos) + GLOBAL_MAP.get_true_distance(j.supply_pos, j.dest_pos)
-                for a in self.amrs
-            ) + j.proc_time
-            est_costs.append(est)
-
-        # 三台 AMR 平行，粗估除以 3
-        return max(busy + sum(est_costs) / max(len(self.amrs), 1), 1.0)
-
-    def update_amr_tasks(self):
-        """
-        Decentralized Execution: Each AMR checks its own local queue.
-        Now with inventory management!
-        """
-        for a in self.amrs:
-            # If AMR is idle and has jobs assigned to it by the GA
-            if a.status == 0 and len(a.local_queue) > 0:
-                next_jid = a.local_queue.popleft()
-                
-                # Find the job object
-                job = next((j for j in self.active_jobs if j.jid == next_jid), None)
-                
-                if job and job.status == 1:
-                    # 1. Lock Job and AMR
-                    job.status = 2 # Processing
-                    a.status = 1
-                    a.current_job = job.jid
-                    material = job.material
-                    
-                    # 2. Check Inventory and Calculate travel + processing
-                    if a.inventory.get(material, 0) == 0:
-                        # Leg 1: Current Pos -> Supply | Leg 2: Supply -> Destination
-                        dist_to_supply = GLOBAL_MAP.get_true_distance((a.x, a.y), job.supply_pos)
-                        dist_to_dest = GLOBAL_MAP.get_true_distance(job.supply_pos, job.dest_pos)
-                        travel_time = (dist_to_supply + dist_to_dest) / CONFIG['AMR_SPEED']
-                        
-                        # Refill inventory
-                        a.inventory[material] = CONFIG['CAPACITY_PER_TYPE']
-                    else:
-                        # Leg 1: Current Pos -> Destination
-                        dist_to_dest = GLOBAL_MAP.get_true_distance((a.x, a.y), job.dest_pos)
-                        travel_time = dist_to_dest / CONFIG['AMR_SPEED']
-
-                    # Consume one item for this job
-                    a.inventory[material] -= 1
-                    
-                    a.remaining_time = travel_time + job.proc_time
-                    
-                    # 3. Teleport AMR to destination (Simulating completion)
-                    a.x, a.y = job.dest_pos
-
-                else:
-                    # If job was already taken or invalid, AMR stays idle to try next tick
-                    pass
-
-    def _check_job_completions(self, dt = 1.0):
-        finished_cnt = 0
-        for a in self.amrs:
-            if a.status == 1:  # Busy
-                a.remaining_time -= dt
-                if a.remaining_time <= 0:
-                    a.status = 0
-                    finished_jid = a.current_job
-                    a.current_job = -1
-                    a.tot_number_of_jobs += 1
-
-                    # Move to completed
-                    for idx, j in enumerate(self.active_jobs):
-                        if j.jid == finished_jid:
-                            j.status = 3
-                            j.finish_ts = self.sim_time + a.remaining_time # ✅ record finish time
-                            comp_j = self.active_jobs.pop(idx)
-                            self.completed_jobs.append(comp_j)
-                            finished_cnt += 1
-                            break
-        return finished_cnt
-
-    def get_state_snapshot(self) -> dict:
-        state = {
-            "time": self.sim_time,
-            "positions": {f"AMR{a.aid+1}": (int(a.x), int(a.y)) for a in self.amrs},
-            "availability": {f"AMR{a.aid+1}": self.sim_time + max(0.0, a.remaining_time) for a in self.amrs},
-            "inventory": {f"AMR{a.aid+1}": a.inventory.copy() for a in self.amrs},
-            "status": {f"AMR{a.aid+1}": 1 if a.status != 0 else 0 for a in self.amrs},
-            "remaining_time": {f"AMR{a.aid+1}": max(0.0, a.remaining_time) for a in self.amrs},
-            "tot_number_of_jobs": {f"AMR{a.aid+1}": a.tot_number_of_jobs for a in self.amrs},
-            "queues": {f"AMR{a.aid+1}": list(a.local_queue) for a in self.amrs}
-        }
-        return state
-
+        if not unstarted: return max(busy, 1.0)
+        est = min(GLOBAL_MAP.get_true_distance(self.sim.positions[amr], j.supply_pos) + GLOBAL_MAP.get_true_distance(j.supply_pos, j.dest_pos) for amr in self.sim.positions) + 15.0
+        return max(busy + est / 3.0, 1.0)
+        
     def _release_arrived_jobs(self):
         moved = 0
         while self.queue and self.queue[0].arrival_ts <= self.sim_time:
@@ -360,11 +503,12 @@ class GridEnv:
         reward = 0.0
         before_done = len(self.completed_jobs)
         compute_time = 0.0
-        reschedule_executed = False
 
         # -------------------------------
         # 2) Apply action (reschedule)
         # -------------------------------
+        reschedule_executed = False
+
         if action == 1:
             if not self.can_reschedule():
                 reward -= EMPTY_RESCHED_PENALTY
@@ -373,24 +517,26 @@ class GridEnv:
                 if not unstarted:
                     reward -= EMPTY_RESCHED_PENALTY
                 else:
-                    from GA import STATIONS
+                    reschedule_executed = True
+                    reward -= 0.5  # Small penalty to discourage RL from indefinitely spamming it
+                    from GA import STATIONS, AMR_KEYS
                     pos_to_station = {v: k for k, v in STATIONS.items()}
                     
                     ga_jobs = []
                     job_map = {}
                     for i, j in enumerate(unstarted):
                         st_name = pos_to_station.get((int(j.dest_pos[0]), int(j.dest_pos[1])), "M1_1")
+                        from GA import Job as GAJob
                         ga_j = GAJob(idx=i, type_=j.material, station=st_name, duration=j.proc_time)
                         ga_jobs.append(ga_j)
-                        job_map[i] = j.jid
-                        
+                        job_map[ga_j.idx] = {'jid': j.jid, 'jtype': j.material, 'time': j.proc_time, 'station': st_name.replace('station', '')}
+                    
                     import time
                     start_cpu_time = time.perf_counter()
-                    init_state = self.get_state_snapshot()
+                    init_state = self.sim.get_gnn_init_state()
                     best_ind, _, compute_time = solve_with_gnn(ga_jobs, self.heuristic_gnn, deterministic=True, init_state=init_state)
-                    # Apply local improve from GA to hone the schedule
                     best_ind = local_improve(best_ind, ga_jobs, max_iters=CONFIG.get('GA_ROUTING_ITERS', 1000), init_state=init_state)
-                    collision_iters = CONFIG.get('GA_COLLISION_ITERS', 0)
+                    collision_iters = CONFIG.get('GA_COLLISION_ITERS', 2000)
                     if collision_iters > 0:
                         best_ind = local_improve(best_ind, ga_jobs, max_iters=collision_iters, check_collision=True, init_state=init_state)
                     
@@ -398,65 +544,63 @@ class GridEnv:
                     self.last_ga_compute_time = compute_time
 
                     # ========================================================
-                    # Time paradox fix: AMRs that were busy keep working during
-                    # the compute window. Complete any jobs that finish before
-                    # the new schedule arrives.
+                    # Fix time paradox: AMRs finish current job & wait 
+                    # during compute time, then get the new schedule.
                     # ========================================================
-                    compute_dt = float(math.ceil(max(1.0, compute_time)))
-                    self._check_job_completions(compute_dt)
-                    self.sim_time += compute_dt
+                    dt = int(math.ceil(max(1.0, compute_time)))
+                    
+                    # 1. Freeze unstarted jobs
+                    for amr in AMR_KEYS:
+                        active_job = self.sim.amr_states[amr]['job']
+                        self.sim.amr_queues[amr].clear()
+                        if active_job is not None:
+                            self.sim.amr_queues[amr].append(active_job)
+                            
+                    # 2. Simulate the world while CPU was calculating (AMRs finish current, then idle)
+                    self.sim.step(dt)
+                    
+                    # 3. Inject new schedule AFTER calculation delay
+                    self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
 
-                    # NOW assign the new schedule (after compute delay)
-                    # assign schedules to AMRs
-                    for a in self.amrs:
-                        a.local_queue.clear()
-                    if best_ind.order:
-                        for jidx in best_ind.order:
-                            jid = job_map[jidx]
-                            amr_str = best_ind.amr_assignment[jidx]
-                            aid = int(amr_str.replace("AMR", "")) - 1
-                            if 0 <= aid < len(self.amrs):
-                                self.amrs[aid].local_queue.append(jid)
-
-                    # ✅ update reschedule gate correctly (after a real schedule)
-                    self.last_resched_t = self.sim_time
+                    self.last_resched_t = float(self.sim.t)
                     self.last_resched_version = getattr(self, "arrival_version", 0)
                     self.last_resched_completion_count = len(self.completed_jobs)
 
-                    reschedule_executed = True
-
-        # -------------------------------
-        # 3) Execute AMR tasks & advance time
-        # -------------------------------
-        self.update_amr_tasks()
+        # 3) Execute AMR tasks & advance time (if no reschedule happened)
+        if not reschedule_executed:
+            dt = int(math.ceil(max(1.0, compute_time)))
+            self.sim.step(dt)
+            
+        self.sim_time = float(self.sim.t)
         
-        if reschedule_executed:
-            # Time was already advanced during compute window above
-            # dt for reward/return reflects the real elapsed time
-            dt = float(math.ceil(max(1.0, compute_time)))
-        else:
-            dt = float(math.ceil(max(1.0, compute_time)))
-            self.sim_time += dt
-            # 4) Completion: only tick when we didn't already tick during compute
-            self._check_job_completions(dt)
+        # Sync active jobs (status=2) from simulator
+        # Find exactly which jobs are physically being processed
+        running_jids = set()
+        for amr, s in self.sim.amr_states.items():
+            if s['job'] is not None:
+                running_jids.add(s['job'].idx)
+        for j in self.active_jobs:
+            if j.status == 1 and j.jid in running_jids:
+                j.status = 2  # Mark as processing
 
-        # -------------------------------
-        # 2.5) Flow-time penalty (Calculated AFTER time advance to penalize GA delay)
-        # -------------------------------
-        # Penalize ALL active jobs (unstarted + assigned/processing) to minimize total flow time.
         reward -= len(self.active_jobs) * dt * FLOW_PENALTY
 
-        # -------------------------------
-        # 4) Completion reward
-        # -------------------------------
-        done_now = len(self.completed_jobs) - before_done
+        # Sync completed jobs
+        done_now = 0
+        for jid in self.sim.completed_jobs_jids:
+            for idx, j in enumerate(self.active_jobs):
+                if j.jid == jid:
+                    j.status = 3
+                    j.finish_ts = self.sim_time
+                    self.completed_jobs.append(self.active_jobs.pop(idx))
+                    done_now += 1
+                    break
+        self.sim.completed_jobs_jids.clear()
+        
         if done_now > 0:
             reward += DONE_REWARD * done_now
-
-        # -------------------------------
-        # 5) Termination
-        # -------------------------------
-        done = (self.sim_time >= CONFIG['SIM_TIME'])
+            
+        done = (self.sim_time >= CONFIG['SIM_TIME']) or (len(self.completed_jobs) >= self.total_jobs)
         return self.get_state_arrays(), reward, done, float(dt)
 
 
@@ -464,29 +608,28 @@ class GridEnv:
 
 
 
+
     def get_state_arrays(self):
-        """
-        Returns raw Python lists (CPU) representing the state.
-        Converting them to Tensors happens during the Training Loop or Test Loop.
-        """
-        # 1. AMR Features: [Status, RemTime, InvA, InvB, InvC, X, Y, 0]
         a_data = []
-        for a in self.amrs:
+        from GA import AMR_KEYS
+        for amr in AMR_KEYS:
+            s = self.sim.amr_states[amr]
+            status_val = 0.0 if s['mode'] == 'idle' else 1.0
+            rem = s['proc_ticks'] if s['mode'] in ['processing', 'processing_old'] else 0.0
             a_data.append([
-                float(a.status), 
-                a.remaining_time / (2*CONFIG['SIM_TIME_SCALE']), 
-                a.inventory.get('A', 0) / CONFIG['CAPACITY_PER_TYPE'], 
-                a.inventory.get('B', 0) / CONFIG['CAPACITY_PER_TYPE'], 
-                a.inventory.get('C', 0) / CONFIG['CAPACITY_PER_TYPE'], 
-                a.x / 10.0, 
-                a.y / 10.0, 
-                a.tot_number_of_jobs / 20.0 # <--- NEW: Normalize total jobs handled
+                status_val, 
+                rem / (2*CONFIG['SIM_TIME_SCALE']), 
+                self.sim.inventory[amr].get('A', 0) / CONFIG['CAPACITY_PER_TYPE'], 
+                self.sim.inventory[amr].get('B', 0) / CONFIG['CAPACITY_PER_TYPE'], 
+                self.sim.inventory[amr].get('C', 0) / CONFIG['CAPACITY_PER_TYPE'], 
+                self.sim.positions[amr][0] / 10.0, 
+                self.sim.positions[amr][1] / 10.0, 
+                0.0
             ])
-        
-        # 2. Job Features: [1, Proc, Wait, DestX, DestY, SuppX, SuppY, A, B, C]
+            
         j_data = []
         if not self.active_jobs: 
-            j_data.append([0.0] * 10) # Padding if empty
+            j_data.append([0.0] * 10)
         else:
             for j in self.active_jobs:
                 mat = [1,0,0] if j.material=='A' else ([0,1,0] if j.material=='B' else [0,0,1])
@@ -500,77 +643,93 @@ class GridEnv:
                     j.supply_pos[1] / 10.0, 
                     *mat
                 ])
-        
-        # 3. Queue Features: [Count, Avg_Proc_Time, Var_Proc_Time]
+                
         unstarted_cnt = sum(j.status == 1 for j in self.active_jobs)
-
         waiting_jobs = [j for j in self.queue if j.arrival_ts <= self.sim_time]
         buf_cnt = len(waiting_jobs)
 
         if buf_cnt > 0:
             proc_times = [j.proc_time for j in waiting_jobs]
             avg_proc = sum(proc_times) / buf_cnt
-            variance_proc = sum((x - avg_proc) ** 2 for x in proc_times) / buf_cnt
-            q_data = [
-                float(unstarted_cnt),
-                float(buf_cnt),
-                avg_proc / 20.0,
-                self.sim_time / CONFIG['SIM_TIME']
-            ]
+            q_data = [float(unstarted_cnt), float(buf_cnt), avg_proc / 20.0, self.sim_time / CONFIG['SIM_TIME']]
         else:
-            q_data = [
-                float(unstarted_cnt),
-                0.0,
-                0.0,
-                self.sim_time / CONFIG['SIM_TIME']
-            ]
+            q_data = [float(unstarted_cnt), 0.0, 0.0, self.sim_time / CONFIG['SIM_TIME']]
         
         return a_data, j_data, q_data
 # ==========================================
 # 4. BATCHED GNN MODEL (THE GPU FIX)
 # ==========================================
-class BatchedHeteroGNN(nn.Module):
-    def __init__(self, h_dim):
+class BatchedHeteroGNNLayer(nn.Module):
+    def __init__(self, h_dim, heads=4):
         super().__init__()
-        # AMR sees: [Self, Job_Mean, Job_Max] -> 3 * h_dim
-        self.upd_amr = nn.Sequential(nn.Linear(h_dim * 3, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim))
-        # Job sees: [Self, AMR_Mean] -> 2 * h_dim
-        self.upd_job = nn.Sequential(nn.Linear(h_dim * 2, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim))
+        # Cross Attention: AMRs query Jobs to understand workload
+        self.amr_to_job_attn = nn.MultiheadAttention(embed_dim=h_dim, num_heads=heads, batch_first=True)
+        # Cross Attention: Jobs query AMRs to understand capacity
+        self.job_to_amr_attn = nn.MultiheadAttention(embed_dim=h_dim, num_heads=heads, batch_first=True)
+        
+        # Self-Attention for AMRs to coordinate with each other
+        self.amr_self_attn = nn.MultiheadAttention(embed_dim=h_dim, num_heads=heads, batch_first=True)
+        
+        # Update layers
+        self.upd_amr = nn.Sequential(
+            nn.Linear(h_dim * 3, h_dim * 2),
+            nn.ReLU(),
+            nn.LayerNorm(h_dim * 2),
+            nn.Linear(h_dim * 2, h_dim)
+        )
+        self.upd_job = nn.Sequential(
+            nn.Linear(h_dim * 2, h_dim * 2),
+            nn.ReLU(),
+            nn.LayerNorm(h_dim * 2),
+            nn.Linear(h_dim * 2, h_dim)
+        )
+        self.norm_amr = nn.LayerNorm(h_dim)
+        self.norm_job = nn.LayerNorm(h_dim)
 
     def forward(self, h_amr, h_job, job_mask):
-        # h_amr: [Batch, 3, H]
-        # h_job: [Batch, MaxJobs, H]
-        # job_mask: [Batch, MaxJobs, 1] (1 for real job, 0 for padding)
+        """
+        h_amr: [Batch, Num_AMRs, H]
+        h_job: [Batch, MaxJobs, H]
+        job_mask: [Batch, MaxJobs, 1] (1 for real job, 0 for padding)
+        """
+        # MultiheadAttention uses key_padding_mask where True = ignore
+        # job_mask is 1 for valid, 0 for padding. We need True where it's 0.
+        attn_mask = (job_mask.squeeze(-1) == 0) # [Batch, MaxJobs]
+        
+        # If all jobs are padded (batch of empty jobs), prevent NaN
+        if attn_mask.all():
+            attn_mask = None 
 
-        # 1. Pool Jobs -> Message to AMR
-        # Mask out padding before mean
-        masked_job = h_job * job_mask
-        # Sum valid jobs and divide by count (avoid div by zero)
-        job_sum = masked_job.sum(dim=1, keepdim=True) 
-        job_count = job_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        job_mean = job_sum / job_count # [Batch, 1, H]
+        # 1. AMRs query Jobs (cross-attention)
+        # Q = h_amr, K = V = h_job
+        msg_job_to_amr, _ = self.amr_to_job_attn(
+            query=h_amr, key=h_job, value=h_job, 
+            key_padding_mask=attn_mask
+        ) # [Batch, Num_AMRs, H]
         
-        # Max Pooling (Critical for detecting outliers like high wait times)
-        # Since h_job is ReLU output (>=0), padding with 0 is safe for max
-        job_max = masked_job.max(dim=1, keepdim=True)[0] # [Batch, 1, H]
-
-        # Expand to all AMRs
-        msg_mean_to_amr = job_mean.expand(-1, h_amr.size(1), -1)
-        msg_max_to_amr = job_max.expand(-1, h_amr.size(1), -1)
+        # 2. AMRs coordinate (self-attention)
+        # Q = K = V = h_amr
+        msg_amr_self, _ = self.amr_self_attn(
+            query=h_amr, key=h_amr, value=h_amr
+        ) # [Batch, Num_AMRs, H]
         
-        # 2. Pool AMRs -> Message to Job
-        amr_mean = h_amr.mean(dim=1, keepdim=True) # [Batch, 1, H]
-        msg_to_job = amr_mean.expand(-1, h_job.size(1), -1)
-
-        # 3. Update
-        # Concatenate features instead of adding them
-        in_amr = torch.cat([h_amr, msg_mean_to_amr, msg_max_to_amr], dim=-1)
-        out_amr = self.upd_amr(in_amr)
+        # 3. Jobs query AMRs (cross-attention)
+        # Q = h_job, K = V = h_amr
+        # AMRs have no padding, so no mask needed
+        msg_amr_to_job, _ = self.job_to_amr_attn(
+            query=h_job, key=h_amr, value=h_amr
+        ) # [Batch, MaxJobs, H]
         
-        in_job = torch.cat([h_job, msg_to_job], dim=-1)
-        out_job = self.upd_job(in_job)
+        # 4. Updates
+        in_amr = torch.cat([h_amr, msg_job_to_amr, msg_amr_self], dim=-1)
+        out_amr = h_amr + self.upd_amr(in_amr) # Residual connection
+        out_amr = self.norm_amr(out_amr)
         
-        return out_amr, out_job * job_mask # Re-apply mask
+        in_job = torch.cat([h_job, msg_amr_to_job], dim=-1)
+        out_job = h_job + self.upd_job(in_job)
+        out_job = self.norm_job(out_job)
+        
+        return out_amr, out_job * job_mask # Re-apply padding mask to jobs
 
 class SchedulerAgent(nn.Module):
     def __init__(self):
@@ -578,7 +737,11 @@ class SchedulerAgent(nn.Module):
         h = CONFIG['HIDDEN_DIM']
         self.enc_amr = nn.Linear(CONFIG['AMR_IN_DIM'], h)
         self.enc_job = nn.Linear(CONFIG['JOB_IN_DIM'], h)
-        self.gnn = BatchedHeteroGNN(h)
+        
+        # Use ModuleList for multiple GNN layers
+        num_layers = CONFIG.get('GNN_LAYERS', 1)
+        self.gnn_layers = nn.ModuleList([BatchedHeteroGNNLayer(h) for _ in range(num_layers)])
+        
         self.head_val = nn.Sequential(nn.Linear(h+CONFIG['QUEUE_DIM'], h), nn.ReLU(), nn.Linear(h, 1))
         self.head_adv = nn.Sequential(nn.Linear(h+CONFIG['QUEUE_DIM'], h), nn.ReLU(), nn.Linear(h, CONFIG['ACTION_DIM']))
 
@@ -587,9 +750,11 @@ class SchedulerAgent(nn.Module):
         h_amr = F.relu(self.enc_amr(x_amr))
         h_job = F.relu(self.enc_job(x_job))
         
-        h_amr, _ = self.gnn(h_amr, h_job, job_mask)
+        # Multiple GNN passes
+        for gnn in self.gnn_layers:
+            h_amr, h_job = gnn(h_amr, h_job, job_mask)
         
-        # Global Pooling
+        # Global Pooling over AMRs
         shop_emb = h_amr.mean(dim=1) # [B, H]
         state = torch.cat([shop_emb, x_q], dim=-1)
         
@@ -624,7 +789,10 @@ def collate_batch(batch_list):
             if L > 0:
                 tens = torch.tensor(j_list, dtype=torch.float32, device=CONFIG['DEVICE'])
                 b_job[i, :L, :] = tens
-                b_mask[i, :L, :] = 1.0
+                if j_list[0][0] == 0.0:
+                    b_mask[i, :L, :] = 0.0
+                else:
+                    b_mask[i, :L, :] = 1.0
                 
         return b_amr, b_job, b_q, b_mask
 
@@ -775,7 +943,7 @@ def main():
             print(f"Ep {ep} | Reward: {ep_rew:.1f} | Avg Loss: {avg_loss:.4f} | Eps: {eps:.2f}")
 
         if ep % 100 == 0:
-            ckpt_path = f"gnn_ddqn_model_v6/gnn_ddqn_model_v6_ep{ep}.pth"
+            ckpt_path = f"gnn_ddqn_model_v8/gnn_ddqn_model_v8_ep{ep}.pth"
             torch.save(agent.state_dict(), ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 

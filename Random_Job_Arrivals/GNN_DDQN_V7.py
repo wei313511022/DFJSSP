@@ -51,21 +51,22 @@ CONFIG = {
     'CAPACITY_PER_TYPE': 3,
     'SIM_TIME': 500.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
+    'COMPUTE_TIME_SCALING': 1.0,
     
     # Training
     'NUM_EPISODES': 1000,
     'BATCH_SIZE': 64,
     'GAMMA': 0.99,
     'LR': 3e-4,
-    'FLOW_PENALTY': 0,
+    'FLOW_PENALTY': 0.01,
     'EPS_START': 1.0,
     'EPS_END': 0.05,
     'EPS_DECAY': 200,
     
     # Model
     'AMR_IN_DIM': 8, 
-    'JOB_IN_DIM': 10, 
-    'QUEUE_DIM': 4, 
+    'JOB_IN_DIM': 11, 
+    'QUEUE_DIM': 7, 
     'HIDDEN_DIM': 256,
     'GNN_LAYERS': 2,
     'ACTION_DIM': 2,    # 0: Wait, 1: Release
@@ -452,21 +453,50 @@ class GridEnv:
         cooldown_ok = (self.sim_time - self.last_resched_t) >= RESCHED_COOLDOWN
         has_unstarted = any(j.status == 1 for j in self.active_jobs)
         new_job_since_last = (self.arrival_version != self.last_resched_version)
+        new_completion_since_last = (len(self.completed_jobs) != self.last_resched_completion_count)
 
-        # Only allow rescheduling if a new job has arrived, 
-        # because the GA already queues jobs optimally.
-        return cooldown_ok and has_unstarted and new_job_since_last
+        # Allow rescheduling on new arrival OR new completion
+        return cooldown_ok and has_unstarted and (new_job_since_last or new_completion_since_last)
 
     def get_action_mask(self):
         return [1.0, 1.0 if self.can_reschedule() else 0.0]
 
 
     def calculate_current_makespan(self):
+        from GA import AMR_KEYS
         busy = max([s['proc_ticks'] for s in self.sim.amr_states.values() if s['mode'] in ['processing', 'processing_old']], default=0.0)
-        unstarted = [j for j in self.active_jobs if j.status == 1]
-        if not unstarted: return max(busy, 1.0)
-        est = min(GLOBAL_MAP.get_true_distance(self.sim.positions[amr], j.supply_pos) + GLOBAL_MAP.get_true_distance(j.supply_pos, j.dest_pos) for amr in self.sim.positions) + 15.0
-        return max(busy + est / 3.0, 1.0)
+        
+        # Distinguish scheduled (in AMR queues) vs truly unscheduled jobs
+        scheduled_jids = set()
+        for amr in AMR_KEYS:
+            s = self.sim.amr_states[amr]
+            if s['job'] is not None:
+                scheduled_jids.add(s['job'].idx)
+            for qj in self.sim.amr_queues[amr]:
+                scheduled_jids.add(qj.idx)
+        
+        unscheduled = [j for j in self.active_jobs if j.status == 1 and j.jid not in scheduled_jids]
+        scheduled = [j for j in self.active_jobs if j.status == 1 and j.jid in scheduled_jids]
+        
+        if not unscheduled and not scheduled:
+            return max(busy, 1.0)
+        
+        # Queued jobs: their routing is already decided, estimate remaining work
+        queued_cost = sum(j.proc_time for j in scheduled) / max(len(self.sim.positions), 1)
+        
+        # Unscheduled jobs: need full travel + proc estimate (more expensive)
+        unscheduled_cost = 0.0
+        if unscheduled:
+            for j in unscheduled:
+                best_dist = min(
+                    GLOBAL_MAP.get_true_distance(self.sim.positions[amr], j.supply_pos) + 
+                    GLOBAL_MAP.get_true_distance(j.supply_pos, j.dest_pos)
+                    for amr in self.sim.positions
+                ) + j.proc_time
+                unscheduled_cost += best_dist
+            unscheduled_cost /= max(len(self.sim.positions), 1)
+        
+        return max(busy + queued_cost + unscheduled_cost, 1.0)
         
     def _release_arrived_jobs(self):
         moved = 0
@@ -518,9 +548,11 @@ class GridEnv:
                     reward -= EMPTY_RESCHED_PENALTY
                 else:
                     reschedule_executed = True
-                    reward -= 0.5  # Small penalty to discourage RL from indefinitely spamming it
                     from GA import STATIONS, AMR_KEYS
                     pos_to_station = {v: k for k, v in STATIONS.items()}
+                    
+                    # Snapshot makespan BEFORE rescheduling (for R3: quality reward)
+                    mk_before = self.calculate_current_makespan()
                     
                     ga_jobs = []
                     job_map = {}
@@ -540,7 +572,7 @@ class GridEnv:
                     if collision_iters > 0:
                         best_ind = local_improve(best_ind, ga_jobs, max_iters=collision_iters, check_collision=True, init_state=init_state)
                     
-                    compute_time = (time.perf_counter() - start_cpu_time)
+                    compute_time = CONFIG.get('COMPUTE_TIME_SCALING', 1.0)*(time.perf_counter() - start_cpu_time)
                     self.last_ga_compute_time = compute_time
 
                     # ========================================================
@@ -561,6 +593,18 @@ class GridEnv:
                     
                     # 3. Inject new schedule AFTER calculation delay
                     self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
+
+                    # R2: Small fixed bonus for successful reschedule
+                    reward += 1.0
+                    
+                    # R3: Schedule-quality reward — scales with backlog size
+                    # More unstarted jobs → bigger benefit from rescheduling
+                    mk_after = self.calculate_current_makespan()
+                    if mk_before > 0:
+                        improvement = max((mk_before - mk_after) / mk_before, 0.0)
+                        # Scale with log(jobs) so benefit grows with backlog but doesn't explode
+                        scale = math.log(max(len(unstarted), 1) + 1)
+                        reward += 2.0 * improvement * scale
 
                     self.last_resched_t = float(self.sim.t)
                     self.last_resched_version = getattr(self, "arrival_version", 0)
@@ -584,6 +628,19 @@ class GridEnv:
                 j.status = 2  # Mark as processing
 
         reward -= len(self.active_jobs) * dt * FLOW_PENALTY
+        
+        # Unscheduled-jobs pressure: penalize having unassigned work sitting around
+        # This prevents the agent from ignoring a growing backlog
+        from GA import AMR_KEYS as _AMR_KEYS
+        _sched_jids = set()
+        for _amr in _AMR_KEYS:
+            _s = self.sim.amr_states[_amr]
+            if _s['job'] is not None:
+                _sched_jids.add(_s['job'].idx)
+            for _qj in self.sim.amr_queues[_amr]:
+                _sched_jids.add(_qj.idx)
+        n_unscheduled = sum(1 for j in self.active_jobs if j.status == 1 and j.jid not in _sched_jids)
+        reward -= 0.02 * n_unscheduled * dt  # Explicit pressure to address unscheduled jobs
 
         # Sync completed jobs
         done_now = 0
@@ -616,6 +673,8 @@ class GridEnv:
             s = self.sim.amr_states[amr]
             status_val = 0.0 if s['mode'] == 'idle' else 1.0
             rem = s['proc_ticks'] if s['mode'] in ['processing', 'processing_old'] else 0.0
+            # S2: Use queue depth instead of wasted 0.0
+            queue_depth = len(self.sim.amr_queues[amr]) / 10.0
             a_data.append([
                 status_val, 
                 rem / (2*CONFIG['SIM_TIME_SCALE']), 
@@ -624,36 +683,76 @@ class GridEnv:
                 self.sim.inventory[amr].get('C', 0) / CONFIG['CAPACITY_PER_TYPE'], 
                 self.sim.positions[amr][0] / 10.0, 
                 self.sim.positions[amr][1] / 10.0, 
-                0.0
+                queue_depth  # S2: AMR queue depth
             ])
             
         j_data = []
         if not self.active_jobs: 
-            j_data.append([0.0] * 10)
+            j_data.append([0.0] * CONFIG['JOB_IN_DIM'])  # S4: match new dim
         else:
+            # S1: Build scheduled set for status encoding
+            scheduled_jids = set()
+            for amr, s in self.sim.amr_states.items():
+                if s['job'] is not None:
+                    scheduled_jids.add(s['job'].idx)
+                for qj in self.sim.amr_queues[amr]:
+                    scheduled_jids.add(qj.idx)
+            
             for j in self.active_jobs:
                 mat = [1,0,0] if j.material=='A' else ([0,1,0] if j.material=='B' else [0,0,1])
+                # S4: Encode job status (0=unstarted/unassigned, 0.5=queued, 1=processing)
+                if j.status == 2:
+                    j_status = 1.0
+                elif j.jid in scheduled_jids:
+                    j_status = 0.5
+                else:
+                    j_status = 0.0
+                # S5: Clip wait time to prevent unbounded values
+                wait_time = min((self.sim_time - j.arrival_ts) / 100.0, 5.0)
                 j_data.append([
                     1.0, 
                     j.proc_time / CONFIG['SIM_TIME_SCALE'], 
-                    (self.sim_time - j.arrival_ts) / 100.0,
+                    wait_time,          # S5: clipped
                     j.dest_pos[0] / 10.0, 
                     j.dest_pos[1] / 10.0, 
                     j.supply_pos[0] / 10.0, 
                     j.supply_pos[1] / 10.0, 
-                    *mat
+                    *mat,
+                    j_status            # S4: new status feature (JOB_IN_DIM=11)
                 ])
                 
-        unstarted_cnt = sum(j.status == 1 for j in self.active_jobs)
+        # S1: Count truly unscheduled jobs (not in any AMR queue or active slot)
+        if not self.active_jobs:
+            unstarted_cnt = 0
+        else:
+            s_jids = set()
+            for amr, s in self.sim.amr_states.items():
+                if s['job'] is not None:
+                    s_jids.add(s['job'].idx)
+                for qj in self.sim.amr_queues[amr]:
+                    s_jids.add(qj.idx)
+            unstarted_cnt = sum(1 for j in self.active_jobs if j.status == 1 and j.jid not in s_jids)
+        
         waiting_jobs = [j for j in self.queue if j.arrival_ts <= self.sim_time]
         buf_cnt = len(waiting_jobs)
-
+        avg_proc = 0.0
         if buf_cnt > 0:
-            proc_times = [j.proc_time for j in waiting_jobs]
-            avg_proc = sum(proc_times) / buf_cnt
-            q_data = [float(unstarted_cnt), float(buf_cnt), avg_proc / 20.0, self.sim_time / CONFIG['SIM_TIME']]
-        else:
-            q_data = [float(unstarted_cnt), 0.0, 0.0, self.sim_time / CONFIG['SIM_TIME']]
+            avg_proc = sum(j.proc_time for j in waiting_jobs) / buf_cnt / 20.0
+
+        # S3: Expanded queue features (QUEUE_DIM=7)
+        avg_queue_depth = sum(len(self.sim.amr_queues[amr]) for amr in AMR_KEYS) / max(len(AMR_KEYS), 1) / 10.0
+        time_since_resched = min((self.sim_time - self.last_resched_t) / 100.0, 5.0)
+        est_makespan = self.calculate_current_makespan() / CONFIG['SIM_TIME']
+        
+        q_data = [
+            float(unstarted_cnt),              # [0] truly unscheduled jobs
+            float(buf_cnt),                    # [1] jobs waiting in arrival queue
+            avg_proc,                          # [2] avg processing time of waiting jobs
+            self.sim_time / CONFIG['SIM_TIME'], # [3] time progress
+            avg_queue_depth,                   # [4] S3: avg AMR queue depth
+            time_since_resched,                # [5] S3: time since last reschedule
+            est_makespan,                      # [6] S3: estimated makespan (schedule quality)
+        ]
         
         return a_data, j_data, q_data
 # ==========================================
@@ -888,7 +987,11 @@ def main():
 
             next_action_mask = env.get_action_mask()  # after step (sim_time/last_resched 已更新)
 
-            memory.push((state, action, reward, next_state, done, curr_action_mask, next_action_mask, dt))
+            # R4: Skip forced-Wait transitions (mask=[1,0] and action=0)
+            # These provide no learning signal about when to reschedule
+            is_forced_wait = (action == 0 and curr_action_mask[1] < 0.5)
+            if not is_forced_wait:
+                memory.push((state, action, reward, next_state, done, curr_action_mask, next_action_mask, dt))
             state = next_state
 
             ep_rew += reward
