@@ -27,7 +27,7 @@ STATIONS = {
     "station5": (9, 0),
 }
 OBSTACLES = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1), (2,3)
 }
 BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
@@ -39,7 +39,7 @@ GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_80.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_60.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        

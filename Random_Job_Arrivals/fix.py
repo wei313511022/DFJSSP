@@ -1,30 +1,48 @@
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import random
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
-from GNN_DDQN_V6 import GridEnv, CONFIG
+from GNN_DDQN_V7 import GridEnv, CONFIG
+
+GLOBAL_SEED = 42
+
+def set_seed(seed):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 # Ensure we use the correct device
 CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
-CONFIG['DATASET_PATH'] = "test_dataset.jsonl"
+CONFIG['DATASET_PATH'] = "test_dataset_r1.jsonl"
 
 def episode_metrics(env):
     """Calculate metrics for the finished episode."""
-    done = len(env.completed_jobs)
-    if done == 0:
-        return done, 1000.0, 1000.0
+    total_jobs = len(getattr(env, "completed_jobs", [])) + len(getattr(env, "active_jobs", [])) + len(getattr(env, "queue", []))
+
+    if total_jobs == 0:
+        return 0.0, 1000.0, 1000.0
+
+    finished_in = sum(1 for j in env.completed_jobs if getattr(j, "finish_ts", 1000.0) <= CONFIG['SIM_TIME'])
+    done_pct = (finished_in / total_jobs) * 100.0
 
     flows = [j.finish_ts - j.arrival_ts for j in env.completed_jobs if j.finish_ts >= 0]
     flow = float(np.mean(flows)) if flows else 1000.0
 
     # Makespan: last completion - first arrival (completed set)
-    first_arr = min(j.arrival_ts for j in env.completed_jobs)
-    last_fin  = max(j.finish_ts  for j in env.completed_jobs)
-    mk = float(last_fin - first_arr)
+    if env.completed_jobs:
+        first_arr = min(j.arrival_ts for j in env.completed_jobs)
+        last_fin  = max(j.finish_ts  for j in env.completed_jobs)
+        mk = float(last_fin - first_arr)
+    else:
+        mk = 1000.0
 
-    return done, flow, mk
+    return done_pct, flow, mk
 
 def run_one_episode_fix(env, period=5.0):
     """
@@ -66,12 +84,14 @@ def run_one_episode_fix(env, period=5.0):
     return done_cnt, flow, mk, total_ga
 
 def run_comparison():
+    set_seed(GLOBAL_SEED)  # Global seed for reproducibility
     # Initialize Environment
     env = GridEnv()
     
     # Configuration
-    PERIODS = [5.0, 10.0, 20.0, 50.0]
-    TEST_EPISODES = len(env.episodes)
+    PERIODS = [1.0, 5.0, 10.0, 20.0, 50.0, 70.0, 100.0, 120.0]
+    # TEST_EPISODES = len(env.episodes)
+    TEST_EPISODES = 10
     CSV_FILENAME = "fix_period_comparison.csv"
     PLOT_FILENAME = "fix_period_comparison_flow.png"
     
@@ -91,6 +111,7 @@ def run_comparison():
         for p in PERIODS:
             # Important: Set the episode index explicitly before reset 
             # to ensure all periods run on the exact same job scenario.
+            set_seed(GLOBAL_SEED + ep * 1000 + int(p))  # Deterministic seed per episode+period
             env.ep_idx = ep
             
             done, flow, mk, ga = run_one_episode_fix(env, period=p)
@@ -99,6 +120,7 @@ def run_comparison():
             results[p]["flow"].append(flow)
             results[p]["mk"].append(mk)
             results[p]["ga"].append(ga)
+        
             
     # --- 1. Save Detailed Results to CSV ---
     with open(CSV_FILENAME, "w", newline="") as f:
@@ -125,7 +147,7 @@ def run_comparison():
 
     # --- 2. Print Summary Table ---
     print("\n" + "="*90)
-    print(f"{'Period (s)':<12} | {'Avg Done':<12} | {'Avg Flow':<12} | {'Avg Makespan':<15} | {'Avg GA Time (s)':<15}")
+    print(f"{'Period (s)':<12} | {'Avg Done(%)':<12} | {'Avg Flow':<12} | {'Avg Makespan':<15} | {'Avg GA Time (s)':<15}")
     print("-" * 90)
     
     for p in PERIODS:

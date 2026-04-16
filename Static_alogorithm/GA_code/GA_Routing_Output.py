@@ -17,37 +17,29 @@ AMR_STARTS = {
     "AMR1": (2, 7),
     "AMR2": (2, 4),
     "AMR3": (2, 1),
-    # "AMR4": (2, 10),
-    # "AMR5": (2, 13),
-    # "AMR6": (2, 16),
-    # "AMR7": (2, 19),
 }
 AMR_KEYS = list(AMR_STARTS.keys())
 STATIONS = {
-    "station1": (18, 16),
-    "station2": (18, 12),
-    "station3": (18, 8),
-    "station4": (18, 4),
-    "station5": (18, 0),
+    "station1": (9, 8),
+    "station2": (9, 6),
+    "station3": (9, 4),
+    "station4": (9, 2),
+    "station5": (9, 0),
 }
 OBSTACLES = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1),(2,3),
-    (10, 2), (10, 3), (10, 4), (10, 10), (10, 11), (10, 12), (10, 13), (10, 18), (10, 19),
-    (11, 2), (11, 3), (11, 4), (11, 10), (11, 11), (11, 12), (11, 13), (11, 18), (11, 19),
-    (15, 6), (15, 7), (15, 8), (15, 9), (15, 14), (15, 15), (15, 16), (15, 17),
-    (16, 6), (16, 7), (16, 8), (16, 9), (16, 14), (16, 15), (16, 16), (16, 17)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1), (2,3)
 }
 BASES = list(AMR_STARTS.values()) # Parking spots are at the bases
 TYPE_DURATION = {"A": 5, "B": 10, "C": 25}
 SUPPLY_LOCATIONS = {"A": (0, 7), "B": (0, 4), "C": (0, 1)}
 _GRID_POINTS = list(AMR_STARTS.values()) + list(STATIONS.values()) + list(OBSTACLES) + list(SUPPLY_LOCATIONS.values())
-GRID_MIN_X = 0
-GRID_MAX_X = 20
-GRID_MIN_Y = 0
-GRID_MAX_Y = 20
+GRID_MIN_X = min(p[0] for p in _GRID_POINTS)
+GRID_MAX_X = max(p[0] for p in _GRID_POINTS)
+GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
+GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_80.jsonl")
+DISPATCH_INBOX = Path("../../test_case/dispatch_inbox_10.jsonl")
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        
@@ -497,7 +489,8 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
 # ==========================================
 def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = True, init_state: dict = None):
     if not check_collision:
-        return decode_schedule(individual, jobs, need_log, False, init_state=init_state)
+        result = decode_schedule(individual, jobs, need_log, False, init_state=init_state)
+        return result + ([],)  # Append empty tick_records
 
     job_map = {job.idx: job for job in jobs}
     amr_queues = {amr: deque() for amr in AMR_STARTS}
@@ -529,6 +522,7 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
     invalid_jobs_count = 0
     
     station_occupied = {s: False for s in STATIONS}
+    tick_records = []  # Record AMR positions at each tick
     
     t = 0
     while True:
@@ -753,15 +747,28 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
                     dur = t - s.get('route_start', t)
                     if dur > 0: timelines.append((amr, s['route_start'], t, "return", f"Return {dur}s"))
 
+        # Record AMR positions at this tick
+        tick_record = {"tick": t}
+        for amr in AMR_KEYS:
+            s = amr_states[amr]
+            current_job_idx = s['job'].idx if s.get('job') is not None else None
+            tick_record[amr] = {
+                "x": positions[amr][0],
+                "y": positions[amr][1],
+                "mode": s['mode'],
+                "job": current_job_idx
+            }
+        tick_records.append(tick_record)
+
         # End of tick
         t += 1
         
     avail = {a: float(t) for a in AMR_KEYS}
-    return avail, timelines, queue_infos, path_logs, invalid_jobs_count
+    return avail, timelines, queue_infos, path_logs, invalid_jobs_count, tick_records
 
 
 def fitness(individual: Individual, jobs: List[Job], check_collision: bool = False, init_state: dict = None) -> Tuple[float, List[Tuple]]:
-    availability, timeline, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
+    availability, timeline, _, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
     makespan = max(availability.values()) - (init_state["time"] if init_state else 0)
     #sum of all AMR finish time offset by init_score
     total_active_time = sum([ans - (init_state["time"] if init_state else 0) for ans in availability.values()])
@@ -816,7 +823,7 @@ def order_crossover(parent_a: Individual, parent_b: Individual, jobs: List[Job])
 
 # Moves a job from the busiest AMR to the idlest AMR.
 def smart_load_balance_mutate(individual: Individual, jobs: List[Job], init_state: dict = None):
-    availability, _, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=False, init_state=init_state)
+    availability, _, _, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=False, init_state=init_state)
     busiest_amr = max(availability, key=availability.get) # find the busiest amr
     idlest_amr = min(availability, key=availability.get)  # find the idlest amr
     if busiest_amr == idlest_amr: return
@@ -865,7 +872,7 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
     if job_count < 2: return current
     
     best_score, _ = fitness(current, jobs, check_collision=check_collision, init_state=init_state) # Current best fitness
-    availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
+    availability, _, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
     critical_amr = max(availability, key=availability.get) # AMR with the longest makespan
     for _ in range(max_iters):
         # Each time, randomly select two job_i and job_j and try to swap them.One of them needs to belong to the critical AMR.
@@ -883,7 +890,7 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
                 current = neighbor
                 best_score = score
                 improved = True
-                availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
+                availability, _, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
                 critical_amr = max(availability, key=availability.get)
         if not improved:
             # Find consecutive blocks with the same AMR and type in the current order.Randomly select one block.Move the entire block to another location.
@@ -1125,8 +1132,8 @@ def make_jobs() -> List[Job]:
         station = random.choice(stations)
         jobs.append(Job(idx=idx, type_=type_, duration=TYPE_DURATION[type_], station=station))
     return jobs
-def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False, save_img: str = None) -> Tuple[float, float]:
-    availability, decoded_timeline, queue_infos, path_logs, invalid_count = decode_schedule_tick_by_tick(individual, jobs, need_log=True, check_collision=True)
+def describe_solution(individual: Individual, jobs: List[Job], solve_time: float = None, show_gantt: bool = False, save_img: str = None, routing_output: str = "amr_routing.jsonl", schedule_output: str = "amr_schedule.jsonl") -> Tuple[float, float]:
+    availability, decoded_timeline, queue_infos, path_logs, invalid_count, tick_records = decode_schedule_tick_by_tick(individual, jobs, need_log=True, check_collision=True)
     makespan = max(availability.values())
     print(f"Optimal Makespan Found: {makespan:.2f}s")
     print(f"Invalid Jobs Count: {invalid_count}")
@@ -1134,6 +1141,42 @@ def describe_solution(individual: Individual, jobs: List[Job], solve_time: float
         print(f"Computation Time: {solve_time:.4f}s")
     if show_gantt or save_img:
         plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count, show_gantt=show_gantt, save_img=save_img)
+    
+    # Write per-tick AMR positions to JSONL
+    with open(routing_output, "w", encoding="utf-8") as f:
+        for record in tick_records:
+            f.write(json.dumps(record) + "\n")
+    print(f"AMR routing output saved to {routing_output} ({len(tick_records)} ticks)")
+    
+    # Write job sequence per AMR to JSONL (with supply info)
+    job_map = {job.idx: job for job in jobs}
+    inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_KEYS}
+    if "AMR1" in inventory: inventory["AMR1"]["A"] = 3
+    if "AMR2" in inventory: inventory["AMR2"]["B"] = 3
+    if "AMR3" in inventory: inventory["AMR3"]["C"] = 3
+    
+    amr_jobs = {amr: [] for amr in AMR_KEYS}
+    for job_idx, amr in zip(individual.order, individual.amr_assignment):
+        job = job_map[job_idx]
+        mat = job.type_
+        entry = {
+            "idx": job.idx,
+            "type": mat,
+            "duration": job.duration,
+            "station": job.station
+        }
+        if inventory[amr][mat] == 0:
+            supply_pos = SUPPLY_LOCATIONS[mat]
+            entry["supply"] = {"material": mat, "location": list(supply_pos)}
+            inventory[amr][mat] = 3  # refill
+        inventory[amr][mat] -= 1
+        amr_jobs[amr].append(entry)
+    with open(schedule_output, "w", encoding="utf-8") as f:
+        for amr in AMR_KEYS:
+            record = {"amr": amr, "jobs": amr_jobs[amr]}
+            f.write(json.dumps(record) + "\n")
+    print(f"AMR schedule output saved to {schedule_output}")
+    
     return makespan, solve_time
 
 if __name__ == "__main__":
@@ -1167,7 +1210,9 @@ if __name__ == "__main__":
             solve_dur = time.perf_counter() - start_time
             
             img_path = f"{args.save_img.split('.')[0]}_{event['index']}.png" if args.save_img else None
-            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur, show_gantt=args.gantt, save_img=img_path)
+            routing_path = f"amr_routing_{event['index']}.jsonl"
+            schedule_path = f"amr_schedule_{event['index']}.jsonl"
+            makespan, computation_time = describe_solution(best_ind, event["jobs"], solve_time=solve_dur, show_gantt=args.gantt, save_img=img_path, routing_output=routing_path, schedule_output=schedule_path)
             results_data.append([event['index'], f"{makespan:.2f}", f"{computation_time:.4f}" if computation_time is not None else "0.0000"])
     else:
         print("No dispatch file found. Generating random jobs...")

@@ -51,7 +51,7 @@ CONFIG = {
     'CAPACITY_PER_TYPE': 3,
     'SIM_TIME': 500.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
-    'COMPUTE_TIME_SCALING': 1.0,
+    'COMPUTE_TIME_SCALING': 30.0,
     
     # Training
     'NUM_EPISODES': 1000,
@@ -62,6 +62,7 @@ CONFIG = {
     'EPS_START': 1.0,
     'EPS_END': 0.05,
     'EPS_DECAY': 200,
+    'RESCHED_COOLDOWN': 1.0,
     
     # Model
     'AMR_IN_DIM': 8, 
@@ -75,7 +76,7 @@ CONFIG = {
     'GA_POP_SIZE': 200,       # Increased from 50
     'GA_GENERATIONS': 150,    # Increased from 100
     'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
-    'GA_COLLISION_ITERS': 2000,  # Disabled for RL training speed
+    'GA_COLLISION_ITERS': 1,  # Disabled for RL training speed
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -449,7 +450,7 @@ class GridEnv:
         return self.get_state_arrays()
     
     def can_reschedule(self):
-        RESCHED_COOLDOWN = 1.0
+        RESCHED_COOLDOWN = CONFIG['RESCHED_COOLDOWN']
         cooldown_ok = (self.sim_time - self.last_resched_t) >= RESCHED_COOLDOWN
         has_unstarted = any(j.status == 1 for j in self.active_jobs)
         new_job_since_last = (self.arrival_version != self.last_resched_version)

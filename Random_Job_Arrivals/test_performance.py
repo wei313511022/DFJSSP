@@ -1,5 +1,6 @@
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import random
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,6 +8,16 @@ import csv
 import argparse
 import importlib
 import sys
+
+GLOBAL_SEED = 42
+
+def set_seed(seed):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 GridEnv = None
 SchedulerAgent = None
@@ -216,12 +227,13 @@ def run_one_episode_fix(env, period=5.0):
     return done_cnt, flow, mk, total_ga
 
 def run_test(model_path, output_csv):
+    set_seed(GLOBAL_SEED)  # Global seed for reproducibility
     env = GridEnv()
     agent = load_agent(model_path)
 
     # TEST_EPISODES = len(env.episodes)
     TEST_EPISODES = 10
-    FIX_PERIOD = 1.0  # ✅ 你要的固定時間 reschedule
+    FIX_PERIOD = 600.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv
@@ -244,10 +256,12 @@ def run_test(model_path, output_csv):
 
     for ep in range(TEST_EPISODES):
         # --- AI ---
+        set_seed(GLOBAL_SEED + ep * 1000)  # Deterministic seed per episode for AI
         env.ep_idx = ep
         ai_done, ai_flow, ai_mk, ai_ga_ms = run_one_episode_ai(env, agent, verbose=True)
 
         # --- FIX (periodic reschedule) ---
+        set_seed(GLOBAL_SEED + ep * 1000 + 500)  # Different but deterministic seed for Fix
         env.ep_idx = ep
         fix_done, fix_flow, fix_mk, fix_ga_ms = run_one_episode_fix(env, period=FIX_PERIOD)
 
@@ -343,7 +357,7 @@ if __name__ == "__main__":
         print(f"Error importing module {args.module}: {e}")
         sys.exit(1)
 
-    CONFIG['DATASET_PATH'] = "test_dataset_r2.jsonl"
+    CONFIG['DATASET_PATH'] = "test_dataset_r1.jsonl"
     CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     run_test(args.model, args.output)
