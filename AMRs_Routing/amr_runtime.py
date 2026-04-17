@@ -28,44 +28,44 @@ from matplotlib.patches import Rectangle, Circle
 SCHEDULE_INBOX = "../Random_Job_Arrivals/schedule_outbox.jsonl"
 
 # ---------- Grid / Layout ----------
-GRID_W, GRID_H = 10, 10
+GRID_W, GRID_H = 10, 11
 
 START_POS:  Dict[int, Tuple[int, int]] = {
-    5: (2.0, 1.0),
-    4: (2.0, 3.0),
-    3: (2.0, 5.0),
-    2: (2.0, 7.0),
-    1: (2.0, 9.0),
+    3: (2.0, 2.0),
+    2: (2.0, 5.0),
+    1: (2.0, 8.0),
 }
 
 # Production stations (right side).
 STATION_POS: Dict[int, Tuple[int, int]] = {
-    5: (9, 0),
-    4: (9, 2),
-    3: (9, 4),
-    2: (9, 6),
-    1: (9, 8),
+    5: (9, 1),
+    4: (9, 3),
+    3: (9, 5),
+    2: (9, 7),
+    1: (9, 9),
 }
 
 # Material stations (left side) by job type
 MAT_POS: Dict[str, Tuple[int, int]] = {
-    "C": (0, 1),
-    "B": (0, 4),
-    "A": (0, 7),
+    "C": (0, 2),
+    "B": (0, 5),
+    "A": (0, 8),
 }
 
 ALL_STATIONS: Set[Tuple[int, int]] = {
     (9, 1),
-    (9, 4),
+    (9, 3),
+    (9, 5),
     (9, 7),
-    (0, 1),
-    (0, 4),
-    (0, 7),
+    (9, 9),
+    (0, 2),
+    (0, 5),
+    (0, 8),
 }
 
 # Optional: static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1), (2, 3)
 }
 
 
@@ -74,10 +74,10 @@ AMR_LOCATIONS: Set[Tuple[int, int]] = set()
 
 # ---------- Simulation timing / motion ----------
 UPDATE_INTERVAL_MS = 200         # timer tick in ms
-SIM_SPEED_MULT     = 1.0         # speed-up factor
+SIM_SPEED_MULT     = 10.0         # speed-up factor
 CELLS_PER_SEC      = 1.0         # grid cells per simulated second
 
-AMR_COUNT = 5                    # number of AMRs
+AMR_COUNT = 3                    # number of AMRs
 
 # Each AMR can carry up to this many units of each material type
 MATERIAL_CAPACITY = 3
@@ -114,7 +114,7 @@ class AMRState:
     posy: float
     nxt_posx: float
     nxt_posy: float
-    state: str = "idle"           # "idle" | "move"
+    state: str = "idle"           # "idle" | "move" | "processing" | "waiting"
     blocked: bool = False
     queue: List[Job] = field(default_factory=list)
 
@@ -129,6 +129,12 @@ class AMRState:
     path: List[Coord] = field(default_factory=list)
     waypoint_idx: int = 0
     move_budget: float = 0.0
+
+    # processing timer
+    proc_remaining: float = 0.0
+
+    # waiting for destination to free up
+    waiting_goal: Optional[Coord] = None
 
     # visuals
     marker: Optional[Circle] = None
@@ -346,6 +352,7 @@ def _plan_path_with_parking(amr: AMRState,
             amr.blocked = False
             amr.waypoint_idx = 1  # index 0 是目前所在格
             amr.move_budget = 0.0  # ★ 換新路徑時清掉舊的 budget
+            amr.waiting_goal = goal  # remember the intended goal
             _update_route_artist(amr)
             return
 
@@ -373,6 +380,7 @@ def _plan_path_with_parking(amr: AMRState,
     amr.blocked = False
     amr.waypoint_idx = 1
     amr.move_budget = 0.0          # ★ 換路徑時也清掉 budget
+    amr.waiting_goal = None         # going directly to goal
     _update_route_artist(amr)
 
 
@@ -500,6 +508,7 @@ def try_start_next_job(amr: AMRState, amrs: Dict[int, AMRState]) -> bool:
         # plan_path_to_station(amr, amr.job.station, amrs)
 
     if cur_cell(amr) != dest:
+        amr.blocked = False  # not blocking while moving
         amr.state = "move"
     else:
         # Path not found or already at target; treat as immediate arrival
@@ -517,7 +526,7 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
     if amr.phase == "go_home":
         print(f"[info] AMR{amr.amr_id} arrived home at {cur_cell(amr)}")
         amr.state = "idle"
-        amr.blocked = True
+        amr.blocked = False
         amr.phase = None
         amr.path = []
         amr.waypoint_idx = 0
@@ -555,6 +564,7 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
             amr.job = None
             amr.phase = None
             amr.state = "idle"
+            amr.blocked = False
             amr.path = []
             amr.waypoint_idx = 0
             _update_route_artist(amr)
@@ -562,27 +572,37 @@ def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
         return
 
     if amr.phase == "deliver":
-        # Arrived at production station -> consume material and finish job
-        before = amr.inventory.get(jtype, 0)
-        amr.inventory[jtype] = max(0, before - 1)
-        print(
-            f"[info] AMR{amr.amr_id} delivered job {amr.job.jid} to station {amr.job.station} "
-            f"(material {jtype}: {before} -> {amr.inventory[jtype]})"
-        )
-        amr.job = None
-        amr.phase = None
-        amr.state = "idle"
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        # Start next job if any
-        try_start_next_job(amr, amrs)
+        # Arrived at production station -> start processing or finish instantly if proc_time=0
+        jtype = amr.job.jtype
+        if amr.job.proc_time > 0:
+            # Start processing
+            amr.proc_remaining = amr.job.proc_time
+            amr.state = "processing"
+            amr.blocked = True  # block the station while processing
+            print(f"[info] AMR{amr.amr_id} started processing job {amr.job.jid} at station {amr.job.station} for {amr.proc_remaining:.1f}s")
+        else:
+            # Instant finish
+            before = amr.inventory.get(jtype, 0)
+            amr.inventory[jtype] = max(0, before - 1)
+            print(
+                f"[info] AMR{amr.amr_id} delivered job {amr.job.jid} to station {amr.job.station} "
+                f"(material {jtype}: {before} -> {amr.inventory[jtype]})"
+            )
+            amr.job = None
+            amr.phase = None
+            amr.state = "idle"
+            amr.path = []
+            amr.waypoint_idx = 0
+            _update_route_artist(amr)
+            # Start next job if any
+            try_start_next_job(amr, amrs)
         return
 
         
 
     # Fallback: unknown phase
     amr.state = "idle"
+    amr.blocked = False
     amr.phase = None
     amr.path = []
     amr.waypoint_idx = 0
@@ -617,6 +637,7 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
                     and (cell in STATION_POS.values() or cell in MAT_POS.values())
                 ):
                     st.phase = "go_home"
+                    st.blocked = False
                     st.state = "move"
                     plan_path_to_home(st, amrs)
 
@@ -672,11 +693,58 @@ def simple_step(amrs: Dict[int, AMRState], dt: float):
                     st.path = []
                     st.waypoint_idx = 0
                     st.move_budget = 0.0
-                    # st.blocked = True
+                    st.state = "waiting"  # wait for destination to free up
+                    st.blocked = True  # block the parking spot
                     _update_route_artist(st)
-                    # 注意：state 我們保持 "move"，這樣下一個 tick 還會幫它重新規劃路徑
+                    # 注意：state 設為 waiting，下一個 tick 會檢查是否可以前往
 
                 break
+
+
+# ---------- Processing logic ----------
+
+    # Handle processing timers
+    for st in amrs.values():
+        if st.state == "processing" and st.proc_remaining > 0:
+            st.proc_remaining -= dt
+            if st.proc_remaining <= 0:
+                # Finish processing
+                st.proc_remaining = 0.0
+                jtype = st.job.jtype
+                before = st.inventory.get(jtype, 0)
+                st.inventory[jtype] = max(0, before - 1)
+                print(
+                    f"[info] AMR{st.amr_id} finished processing job {st.job.jid} at station {st.job.station} "
+                    f"(material {jtype}: {before} -> {st.inventory[jtype]})"
+                )
+                st.job = None
+                st.phase = None
+                st.state = "idle"
+                st.blocked = False  # no longer blocking
+                st.path = []
+                st.waypoint_idx = 0
+                st.waiting_goal = None
+                _update_route_artist(st)
+                try_start_next_job(st, amrs)
+
+
+# ---------- Waiting logic ----------
+
+    # Check waiting AMRs if their goal is now free
+    for st in amrs.values():
+        if st.state == "waiting" and st.waiting_goal is not None:
+            goal = st.waiting_goal
+            occupied_by_other = any(
+                (cur_cell(o) == goal and o.amr_id != st.amr_id)
+                for o in amrs.values()
+            )
+            blocked = _build_blocked_for(st, amrs)
+            if goal not in blocked and not occupied_by_other:
+                # Goal is free, plan path to it
+                _plan_path_with_parking(st, amrs, goal)
+                st.state = "move"
+                st.blocked = False  # no longer blocked
+                st.waiting_goal = None
 
 
 # ---------- Drawing ----------
@@ -886,7 +954,13 @@ def main():
                     blocked_string = "blocked"
                 else:
                     blocked_string = "unblocked"
-                status_str = f"AMR{k}: {state_str}, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx} y:{st.posy})"
+                
+                if st.state == "processing":
+                    status_str = f"AMR{k}: processing ({st.proc_remaining:.1f}s), {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
+                elif st.state == "waiting":
+                    status_str = f"AMR{k}: waiting, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
+                else:
+                    status_str = f"AMR{k}: {state_str}, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
 
                 # label above the AMR
                 if st.label:
