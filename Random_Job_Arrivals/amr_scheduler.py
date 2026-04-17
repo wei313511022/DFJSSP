@@ -32,7 +32,7 @@ def emit_assignment(amr_id, job):
 
 # ------------ Config ------------
 INBOX_PATH         = "dispatch_inbox.jsonl"
-AMR_COUNT          = 5
+AMR_COUNT          = 3
 UPDATE_INTERVAL_MS = 250
 
 # --- MODIFICATION: Isolate Job Types & Colors ---

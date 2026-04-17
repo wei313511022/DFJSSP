@@ -42,7 +42,7 @@ from GNN import SchedulerGNN, solve_with_gnn
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'DATASET_PATH': 'training_dataset_r2.jsonl',
-    'SAVE_PATH': 'gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth',
+    'SAVE_PATH': 'models/gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth',
     
     # Physics
     'GRID_WIDTH': 10,
@@ -1012,7 +1012,7 @@ def main():
             print(f"Ep {ep} | Reward: {ep_rew:.1f} | Avg Loss: {avg_loss:.4f} | Eps: {eps:.2f}")
 
         if ep % 100 == 0:
-            ckpt_path = f"gnn_ddqn_model_v7/gnn_ddqn_model_v7_ep{ep}.pth"
+            ckpt_path = f"models/gnn_ddqn_model_v7/gnn_ddqn_model_v7_ep{ep}.pth"
             torch.save(agent.state_dict(), ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 
