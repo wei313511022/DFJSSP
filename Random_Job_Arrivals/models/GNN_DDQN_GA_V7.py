@@ -43,17 +43,17 @@ from GNN.GNN import SchedulerGNN, solve_with_gnn
 # ==========================================
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'DATASET_PATH': '../../test_case/dynamic/test_dataset_demo.jsonl',
-    'SAVE_PATH': '../models_pth/gnn_ddqn_model_v7_demo',
+    'DATASET_PATH': '../../test_case/dynamic/training_dataset_r4.jsonl',
+    'SAVE_PATH': '../models_pth/gnn_ddqn_model_v7',
     
     # Physics
     'GRID_WIDTH': 10,
     'SCALE': 1.0,
     'AMR_SPEED': 1.0,
     'CAPACITY_PER_TYPE': 3,
-    'SIM_TIME': 700.0,  # Max sim time per episode
+    'SIM_TIME': 500.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
-    'COMPUTE_TIME_SCALING': 30.0,
+    'COMPUTE_TIME_SCALING': 1.0,
     
     # Training
     'NUM_EPISODES': 1000,
@@ -78,7 +78,7 @@ CONFIG = {
     'GA_POP_SIZE': 200,       # Increased from 50
     'GA_GENERATIONS': 150,    # Increased from 100
     'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
-    'GA_COLLISION_ITERS': 1,  # Disabled for RL training speed
+    'GA_COLLISION_ITERS': 2000,  # Disabled for RL training speed
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -242,7 +242,7 @@ class TickSimulator:
         return state
 
     def step(self, dt: int):
-        from GA.GA import AMR_KEYS, SUPPLY_LOCATIONS, STATIONS, AMR_STARTS, shortest_path, shortest_path_avoiding, OBSTACLES, _is_within_bounds
+        from GA.GA import AMR_KEYS, SUPPLY_LOCATIONS, STATIONS, AMR_STARTS, shortest_path, OBSTACLES, _is_within_bounds
         import random
         # Extrapolate forward by exactly dt ticks
         for _ in range(dt):
@@ -295,121 +295,96 @@ class TickSimulator:
                             s['goal'] = AMR_STARTS[amr]
                             s['job'] = None
             
-            # 2. Movement — priority: processing > lexicographical
-            from GA.GA import shortest_path_avoiding
+            # 2. Movement Negotiation (Collision-Free Routing Logic directly from GA)
             moves = {}
-            occupied = set()  # cells claimed as DESTINATIONS by higher-priority AMRs
-
-            def get_prio(amr_id):
-                m = self.amr_states[amr_id]['mode']
-                if m in ['processing', 'processing_old']: return 0
-                return 1
+            def prio(amr):
+                m = self.amr_states[amr]['mode']
+                if m in ['processing', 'processing_old']: return 100
+                if m == 'idle': return 10
+                if m == 'moving_station': return 50
+                if m == 'moving_supply': return 40
+                return 30
+                
+            ordered = sorted(AMR_KEYS, key=prio, reverse=True)
+            reserved = set()
             
-            ordered_amrs = sorted(AMR_KEYS, key=lambda a: (get_prio(a), a))
-
-            for amr in ordered_amrs:
-                s = self.amr_states[amr]
+            for amr in ordered:
+                m = self.amr_states[amr]['mode']
                 p = self.positions[amr]
-
-                # Stationary modes: reserve position and skip
-                if s['mode'] in ['processing', 'processing_old']:
+                
+                is_blocking_station = False
+                is_blocking_highway = False
+                if m == 'idle':
+                    for st_pos in STATIONS.values():
+                        if p == st_pos:
+                            is_blocking_station = True
+                            break
+                    if p[0] == 2:
+                        is_blocking_highway = True
+                        
+                if m in ['processing', 'processing_old']:
                     moves[amr] = p
-                    occupied.add(p)
-                    continue
-
-                # Determine goal
+                    reserved.add(p)
+                elif m == 'idle' and not is_blocking_station and not is_blocking_highway and p == self.amr_states[amr].get('goal', p):
+                    moves[amr] = p
+                    reserved.add(p)
+                elif m == 'moving_station' and p == self.amr_states[amr]['goal']:
+                    moves[amr] = p
+                    reserved.add(p)
+                    
+            for amr in ordered:
+                if amr in moves: continue
+                p = self.positions[amr]
+                s = self.amr_states[amr]
                 g = s['goal'] if s.get('goal') is not None else p
                 if s.get('dodge_ticks', 0) > 0:
                     g = s['dodge_goal']
                     s['dodge_ticks'] -= 1
-
-                # If idle at goal with nothing to do, check if blocking
-                if p == g and s['mode'] == 'idle' and p not in occupied:
-                    is_blocking = False
-                    for st_pos in STATIONS.values():
-                        if p == st_pos:
-                            is_blocking = True
-                            break
-                    if not is_blocking and p[0] != 2:  # not on highway
-                        moves[amr] = p
-                        occupied.add(p)
-                        continue
-
-                # Build blocked set:
-                # - All destinations claimed by higher-priority AMRs
-                # - Old positions of higher-priority AMRs that are MOVING AWAY
-                #   (prevents swapping into where they came from)
-                extra_blocked = occupied.copy()
-                extra_blocked.discard(p)
-                for o_amr in ordered_amrs:
-                    if o_amr == amr:
-                        break
-                    o_old = self.positions[o_amr]
-                    o_new = moves.get(o_amr, o_old)
-                    if o_old != o_new:
-                        extra_blocked.add(o_old)
-
-                path = shortest_path_avoiding(p, g, extra_blocked)
-                next_step = path[1] if len(path) > 1 else p
-
-                is_swap = False
-                for o_amr, o_next in moves.items():
-                    if o_next == p and self.positions[o_amr] == next_step:
-                        is_swap = True
-                        break
-
-                must_dodge = False
-                if is_swap or p in occupied:
-                    must_dodge = True
                     
-                if must_dodge:
-                    if next_step != p and next_step not in occupied and next_step not in extra_blocked:
-                        pass # A* gave us a safe escape route
-                    else:
-                        # Emergency dodge: find a safe adjacent tile
-                        best_dodge = None
-                        best_dist = float('inf')
-                        for dx, dy in [(0,1),(1,0),(0,-1),(-1,0)]:
-                            adj = (p[0]+dx, p[1]+dy)
-                            if not _is_within_bounds(adj) or adj in OBSTACLES: continue
-                            if adj in occupied or adj in extra_blocked: continue
-                            
-                            dist = abs(adj[0] - g[0]) + abs(adj[1] - g[1])
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_dodge = adj
-                        
-                        if best_dodge:
-                            next_step = best_dodge
-                        else:
-                            next_step = p # Trapped
-                else:
-                    if next_step in occupied:
-                        next_step = p
+                path = shortest_path(p, g)
+                next_step = path[1] if len(path) > 1 else p
                 
-                moves[amr] = next_step
-                occupied.add(next_step)
-
-                # Wait patiently if blocked, unless returning to base
-                if moves[amr] == p and g != p:
+                if next_step in reserved:
+                    moves[amr] = p
+                    reserved.add(p)
+                else:
+                    swap = False
+                    for o_amr, o_next in moves.items():
+                        if o_next == p and self.positions[o_amr] == next_step:
+                            swap = True
+                            break
+                    if swap:
+                        moves[amr] = p
+                        reserved.add(p)
+                    else:
+                        moves[amr] = next_step
+                        reserved.add(next_step)
+                        
+                if moves[amr] == p and next_step != p:
                     s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
-                    if s['blocked_ticks'] > 5 and s['mode'] == 'moving_base':
-                        possible_dodges = []
-                        for dy in [0, 1, 8, 9]:
-                            for dx in range(0, 20):
-                                dpos = (dx, dy)
-                                if dpos not in OBSTACLES: possible_dodges.append(dpos)
-                        if possible_dodges:
-                            s['goal'] = random.choice(possible_dodges)
-                            s['blocked_ticks'] = 0
+                    if s['blocked_ticks'] > 5 and s['mode'] in ['moving_supply', 'moving_station', 'moving_base', 'idle']:
+                        if s['mode'] == 'moving_base':
+                            possible_dodges = []
+                            for dy in [0, 1, 8, 9]:
+                                for dx in range(0, 20):
+                                    dpos = (dx, dy)
+                                    if dpos not in OBSTACLES: possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['goal'] = random.choice(possible_dodges)
+                                s['blocked_ticks'] = 0
+                        else:
+                            possible_dodges = []
+                            for dy in range(-3, 4):
+                                for dx in range(-3, 4):
+                                    dpos = (p[0]+dx, p[1]+dy)
+                                    if _is_within_bounds(dpos) and dpos not in OBSTACLES:
+                                        possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['dodge_goal'] = random.choice(possible_dodges)
+                                s['dodge_ticks'] = 15
                 else:
                     s['blocked_ticks'] = 0
-
-            # Collision assertion (debug)
-            final_positions = list(moves.values())
-            if len(final_positions) != len(set(final_positions)):
-                print(f"[COLLISION @ t={self.t}] {moves}")
-
+                    
             # 3. Apply moves
             for amr in AMR_KEYS:
                 self.positions[amr] = moves[amr]
@@ -596,7 +571,13 @@ class GridEnv:
                     import time
                     start_cpu_time = time.perf_counter()
                     init_state = self.sim.get_gnn_init_state()
-                    best_ind, _, compute_time = solve_with_gnn(ga_jobs, self.heuristic_gnn, deterministic=True, init_state=init_state)
+                    # best_ind, _, compute_time = solve_with_gnn(ga_jobs, self.heuristic_gnn, deterministic=True, init_state=init_state)
+                    import GA.GA as GA
+                    GA.POPULATION_SIZE = CONFIG.get('GA_POP_SIZE', 200)
+                    GA.GENERATIONS = CONFIG.get('GA_GENERATIONS', 150)
+                    
+                    best_ind, _ = ga_evolve(ga_jobs, init_state=init_state)
+                    
                     best_ind = local_improve(best_ind, ga_jobs, max_iters=CONFIG.get('GA_ROUTING_ITERS', 1000), init_state=init_state)
                     collision_iters = CONFIG.get('GA_COLLISION_ITERS', 2000)
                     if collision_iters > 0:
@@ -625,7 +606,7 @@ class GridEnv:
                     self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
 
                     # R2: Small fixed bonus for successful reschedule
-                    # reward += 1.0
+                    reward += 1.0
                     
                     # R3: Schedule-quality reward — scales with backlog size
                     # More unstarted jobs → bigger benefit from rescheduling
@@ -921,7 +902,7 @@ def optimize(agent, target, opt, memory):
     # Current Q
     q_all = agent(*curr_state)  # [B,2]
     # invalid -> very negative
-    q_all = q_all + (cur_amask - 1.0) * 1e7
+    q_all = q_all + (cur_amask - 1.0) * 1e9
     q_curr = q_all.gather(1, act)
 
     with torch.no_grad():
@@ -929,12 +910,12 @@ def optimize(agent, target, opt, memory):
 
         # online net chooses next action (masked)
         q_next_online = agent(ns_amr, ns_job, ns_q, ns_mask)        # [B,2]
-        q_next_online = q_next_online + (next_amask - 1.0) * 1e7
+        q_next_online = q_next_online + (next_amask - 1.0) * 1e9
         next_acts = q_next_online.argmax(1, keepdim=True)           # [B,1]
 
         # target net evaluates it (masked same way也行，保險)
         q_next_target = target(ns_amr, ns_job, ns_q, ns_mask)        # [B,2]
-        q_next_target = q_next_target + (next_amask - 1.0) * 1e7
+        q_next_target = q_next_target + (next_amask - 1.0) * 1e9
         next_vals = q_next_target.gather(1, next_acts)
 
         # SMDP Time-Discounting: scale GAMMA by the actual elapsed time dt
@@ -979,6 +960,7 @@ def main():
                 # 只從 valid actions sample
                 valid_actions = [i for i, m in enumerate(mask) if m > 0.5]
                 action = random.choice(valid_actions)
+            # Inside main() while True loop:
             else:
                 with torch.no_grad():
                     s_amr = torch.tensor([state[0]], dtype=torch.float32, device=CONFIG['DEVICE'])
@@ -999,7 +981,7 @@ def main():
 
                     # action mask: invalid -> -inf
                     if mask[1] < 0.5:
-                        q[0, 1] = -1e7
+                        q[0, 1] = -1e9
 
                     action = q.argmax(1).item()
                     action_str = "RESCHEDULE" if action == 1 else "WAIT"

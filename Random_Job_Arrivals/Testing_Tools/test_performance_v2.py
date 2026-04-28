@@ -122,7 +122,10 @@ def run_one_episode_ai(env, agent, verbose=True, print_q=False):
         s_q   = torch.tensor([state[2]], dtype=torch.float32, device=CONFIG['DEVICE'])
 
         with torch.no_grad():
-            q = agent(s_amr, s_job, s_q, job_mask)  # [1,2]
+            if hasattr(agent, "q_values"):
+                q = agent.q_values(s_amr, s_job, s_q, job_mask)
+            else:
+                q = agent(s_amr, s_job, s_q, job_mask)  # [1,2]
 
             # decision-time action mask (BEFORE step)
             amask = env.get_action_mask()  # [1.0, 0/1]
@@ -233,7 +236,7 @@ def run_test(model_path, output_csv):
 
     # TEST_EPISODES = len(env.episodes)
     TEST_EPISODES = 10
-    FIX_PERIOD = 50.0  # ✅ 你要的固定時間 reschedule
+    FIX_PERIOD = 1.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv
@@ -343,9 +346,9 @@ def run_test(model_path, output_csv):
   
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
-    parser.add_argument("--model", type=str, default="../models_pth/gnn_ddqn_model_v7_demo/gnn_ddqn_model_v7_ep800.pth", help="Path to the model file")
-    parser.add_argument("--output", type=str, default="../models_pth/gnn_ddqn_model_v7_demo/benchmark_results.csv", help="Path to the output CSV file")
-    parser.add_argument("--module", type=str, default="models.GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
+    parser.add_argument("--model", type=str, default="../models_pth/gnn_ddqn_model_v8_demo/gnn_ddqn_model_v8_ep200.pth", help="Path to the model file")
+    parser.add_argument("--output", type=str, default="../models_pth/gnn_ddqn_model_v8_demo/benchmark_results.csv", help="Path to the output CSV file")
+    parser.add_argument("--module", type=str, default="models.GNN_DDQN_V8", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()
 
     # Ensure parent directory is in sys.path so we can import dynamically

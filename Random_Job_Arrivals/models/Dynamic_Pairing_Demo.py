@@ -31,9 +31,21 @@ from GNN_DDQN_V7 import (
     GridEnv, SchedulerAgent, CONFIG, STATIONS, JOB_PROPS,
 )
 
+import random
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
+
+
 # ======================== Files ========================
 SCHEDULE_OUTBOX = "schedule_outbox.jsonl"
-DATASET_PATH = CONFIG['DATASET_PATH']
+DATASET_PATH = '../../test_case/dynamic/test_dataset_r2.jsonl'
+AMR_STATE_FILE = "amr_state.json"
 
 # Reset outbox each run
 open(SCHEDULE_OUTBOX, "w").close()
@@ -52,7 +64,7 @@ def emit_assignment(amr_id: int, jid: int, jtype: str, proc_time: float, station
         f.write(json.dumps(rec) + "\n")
 
 # ======================== Config ========================
-SIM_SPEED_MULTIPLIER = 1.0     # 1.0 = real-time, 5.0 = 5x speed, etc.
+SIM_SPEED_MULTIPLIER = 5.0     # 1.0 = real-time, 5.0 = 5x speed, etc.
 UPDATE_INTERVAL_MS   = 200     # Display refresh rate — keep fast for smooth animation
 
 LEFT_LABEL_PAD = 5.5
@@ -89,6 +101,7 @@ is_running: bool = False
 accumulated_sim_dt: float = 0.0   # Fractional accumulator for tick stepping
 
 # Top queue (pending jobs)
+all_visual_jobs: List[VisualJob] = []
 jobs_top: List[VisualJob] = []
 rects_top: List[Rectangle] = []
 texts_top: List = []
@@ -109,9 +122,64 @@ ai_agent: SchedulerAgent = None
 total_reschedule_count: int = 0
 last_action_str: str = "INIT"
 
-# Threading state
+# Threading & Multiprocessing state
 ga_result_queue: Queue = Queue()   # background thread → main thread
 is_computing: bool = False
+visual_amr_queues: Dict = {}       # UI illusion to keep jobs visible during computation
+
+import concurrent.futures
+import multiprocessing as mp
+
+_process_executor = None
+
+def get_process_executor():
+    global _process_executor
+    if _process_executor is None:
+        ctx = mp.get_context('spawn')
+        _process_executor = concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx)
+    return _process_executor
+
+def _mp_bg_worker(ga_jobs, init_state, job_map, gnn_state_dict, device, routing_iters, collision_iters):
+    import sys, os
+    STATIC_ALGO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__) if '__file__' in globals() else '.', '../../Static_alogorithm'))
+    if STATIC_ALGO_PATH not in sys.path:
+        sys.path.append(STATIC_ALGO_PATH)
+        
+    try:
+        from GNN.GNN import solve_with_gnn, SchedulerGNN
+        from GA.GA import local_improve
+        import time as _time
+        import torch
+
+        start = _time.perf_counter()
+        
+        heuristic_gnn = SchedulerGNN(amr_in_dim=8, job_in_dim=10, hidden_dim=128, gnn_layers=2)
+        if gnn_state_dict:
+            heuristic_gnn.load_state_dict(gnn_state_dict)
+        heuristic_gnn.to(device)
+        heuristic_gnn.eval()
+
+        best_ind, _, _ = solve_with_gnn(
+            ga_jobs, heuristic_gnn, deterministic=True, init_state=init_state
+        )
+        best_ind = local_improve(
+            best_ind, ga_jobs,
+            max_iters=routing_iters,
+            init_state=init_state
+        )
+        if collision_iters > 0:
+            best_ind = local_improve(
+                best_ind, ga_jobs,
+                max_iters=collision_iters,
+                check_collision=True, init_state=init_state
+            )
+        elapsed = _time.perf_counter() - start
+        return best_ind, job_map, elapsed
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, None, _time.perf_counter() - start
+
 
 # ======================== Artist Helpers ========================
 def remove_artists(rects, texts):
@@ -219,6 +287,7 @@ def init_ai():
     global ai_env, ai_agent
 
     CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+    CONFIG['DATASET_PATH'] = DATASET_PATH
 
     ai_env = GridEnv()
     ai_env.reset()
@@ -246,7 +315,7 @@ def load_jobs_from_dataset():
         return
     episode = json.loads(first_line)
     all_jobs_stream = sorted(episode["jobs"], key=lambda j: j["arrival_time"])
-    print(f"[DATA] Loaded {len(all_jobs_stream)} jobs from first episode")
+    # print(f"[DATA] Loaded {len(all_jobs_stream)} jobs from first episode")
 
 def spawn_arrived_jobs(ax):
     """Check if any jobs from the dataset have arrived and add them to the visual queue."""
@@ -264,11 +333,9 @@ def spawn_arrived_jobs(ax):
             arrival_ts=raw["arrival_time"],
             station=raw["dest_station_id"],
         )
-        jobs_top.append(vj)
+        all_visual_jobs.append(vj)
         next_job_idx += 1
         spawned += 1
-    if spawned > 0:
-        rebuild_top_lane(ax)
     return spawned
 
 def get_ai_action():
@@ -317,6 +384,9 @@ def start_background_ga():
         }
 
     # ----- Freeze queues: keep only active job, remove unstarted -----
+    global visual_amr_queues
+    visual_amr_queues = {amr: list(ai_env.sim.amr_queues[amr]) for amr in AMR_KEYS}
+
     for amr in AMR_KEYS:
         active_job = ai_env.sim.amr_states[amr]['job']
         ai_env.sim.amr_queues[amr].clear()
@@ -332,35 +402,36 @@ def start_background_ga():
     print(f"[AI] t={ai_env.sim_time:.1f}  Started GA in background | "
           f"{len(unstarted)} unstarted jobs")
 
-    # ---- Background worker (does NOT touch TickSimulator) ----
-    def _bg_worker():
-        from GNN.GNN import solve_with_gnn
-        from GA.GA import local_improve
-        import time as _time
+    # ---- Snapshot PyTorch Weights Safely ----
+    gnn_state = None
+    if getattr(ai_env, 'heuristic_gnn', None) is not None:
+        gnn_state = {k: v.cpu() for k, v in ai_env.heuristic_gnn.state_dict().items()}
+    device_name = CONFIG.get('DEVICE', 'cpu')
+    routing_iters = CONFIG.get('GA_ROUTING_ITERS', 1000)
+    collision_iters = CONFIG.get('GA_COLLISION_ITERS', 2000)
 
-        start = _time.perf_counter()
-        best_ind, _, _ = solve_with_gnn(
-            ga_jobs, heuristic_gnn, deterministic=True, init_state=init_state
-        )
-        best_ind = local_improve(
-            best_ind, ga_jobs,
-            max_iters=CONFIG.get('GA_ROUTING_ITERS', 1000),
-            init_state=init_state
-        )
-        collision_iters = CONFIG.get('GA_COLLISION_ITERS', 2000)
-        if collision_iters > 0:
-            best_ind = local_improve(
-                best_ind, ga_jobs,
-                max_iters=collision_iters,
-                check_collision=True, init_state=init_state
-            )
-        elapsed = _time.perf_counter() - start
+    # ---- Submit to Process Pool ----
+    future = get_process_executor().submit(
+        _mp_bg_worker, 
+        ga_jobs, 
+        init_state, 
+        job_map, 
+        gnn_state, 
+        device_name, 
+        routing_iters, 
+        collision_iters
+    )
 
-        # Thread-safe hand-off to main thread
-        ga_result_queue.put((best_ind, job_map, elapsed))
-
-    t = threading.Thread(target=_bg_worker, daemon=True)
-    t.start()
+    # ---- Thread bridging to GUI queue ----
+    def _wait_and_forward(f):
+        try:
+            res = f.result()
+            ga_result_queue.put(res)
+        except Exception as e:
+            print(f"[ERROR] Background worker failed: {e}")
+            ga_result_queue.put((None, None, 0.0))
+        
+    threading.Thread(target=_wait_and_forward, args=(future,), daemon=True).start()
 
 def advance_simulation_one_tick():
     """Advance the TickSimulator by exactly 1 tick and sync GridEnv state."""
@@ -395,10 +466,16 @@ def update_amr_lanes_from_sim(ax):
     from GA.GA import AMR_KEYS
     clear_amr_lanes(ax)
 
+    done_jids = {j.jid for j in ai_env.completed_jobs} if ai_env else set()
+
     for amr in AMR_KEYS:
         amr_id = int(amr.replace("AMR", ""))
-        queue = ai_env.sim.amr_queues[amr]
         state = ai_env.sim.amr_states[amr]
+
+        if is_computing and amr in visual_amr_queues:
+            queue = [qj for qj in visual_amr_queues[amr] if qj.idx not in done_jids]
+        else:
+            queue = ai_env.sim.amr_queues[amr]
 
         # Draw the currently active job (if any)
         if state['job'] is not None:
@@ -434,6 +511,71 @@ def write_schedule_outbox():
                 continue
             station_num = int(qj.station.replace("station", ""))
             emit_assignment(amr_id, qj.idx, qj.type_, qj.duration, station_num)
+
+
+def write_amr_state():
+    """Write authoritative AMR state to JSON for Routing_Demo viewer."""
+    from GA.GA import AMR_KEYS, shortest_path_avoiding
+    if ai_env is None:
+        return
+    sim = ai_env.sim
+    state = {"sim_time": float(sim.t)}
+    amrs_data = {}
+    # Collect all AMR positions for collision-aware pathfinding
+    all_positions = {amr: sim.positions[amr] for amr in AMR_KEYS}
+    for amr in sorted(AMR_KEYS):  # AMR1 first
+        amr_id = amr.replace("AMR", "")
+        s = sim.amr_states[amr]
+        pos = sim.positions[amr]
+        job_info = {}
+        if s['job'] is not None:
+            j = s['job']
+            station_num = int(j.station.replace("station", ""))
+            job_info = {
+                "job_idx": j.idx,
+                "job_type": j.type_,
+                "job_station": station_num,
+                "job_duration": j.duration,
+            }
+        # Determine phase string for Routing_Demo
+        mode = s['mode']
+        if mode == 'moving_supply':
+            phase = "supply"
+        elif mode in ('moving_station', 'moving_base'):
+            phase = "deliver"
+        else:
+            phase = None
+        # Goal position
+        goal = s.get('goal')
+        goal_xy = list(goal) if goal else None
+        # Compute A* path avoiding other AMRs
+        path = []
+        if goal is not None and mode in ('moving_supply', 'moving_station', 'moving_base'):
+            other_amr_positions = {all_positions[o] for o in AMR_KEYS if o != amr}
+            path = [list(p) for p in shortest_path_avoiding(pos, goal, other_amr_positions)]
+        # Queue contents
+        queue_jids = []
+        for qj in sim.amr_queues[amr]:
+            if s['job'] is not None and qj.idx == s['job'].idx:
+                continue
+            queue_jids.append(qj.idx)
+        amrs_data[amr_id] = {
+            "x": pos[0], "y": pos[1],
+            "mode": mode,
+            "phase": phase,
+            "goal": goal_xy,
+            "path": path,
+            "proc_ticks": s.get('proc_ticks', 0),
+            "inventory": sim.inventory[amr].copy(),
+            "queue_jids": queue_jids,
+            **job_info,
+        }
+    state["amrs"] = amrs_data
+    # Atomic write: write to tmp then rename to avoid partial reads
+    tmp_path = AMR_STATE_FILE + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp_path, AMR_STATE_FILE)
 
 
 # ======================== Main ========================
@@ -482,37 +624,38 @@ def main():
             # 4) Check for completed GA results from background thread
             try:
                 best_ind, job_map, elapsed = ga_result_queue.get_nowait()
-                # Apply the new schedule
-                ai_env.sim.assign_schedules(
-                    best_ind.order, best_ind.amr_assignment, job_map
-                )
-                ai_env.last_resched_t = float(ai_env.sim.t)
-                ai_env.last_resched_version = ai_env.arrival_version
-                ai_env.last_resched_completion_count = len(ai_env.completed_jobs)
-                is_computing = False
-                total_reschedule_count += 1
-                last_action_str = f"RESCHEDULE (GA={elapsed*1000:.0f}ms)"
-                write_schedule_outbox()
-                print(f"[AI] t={ai_env.sim_time:.1f}  RESCHEDULE #{total_reschedule_count} "
-                      f"| active={len(ai_env.active_jobs)} "
-                      f"| done={len(ai_env.completed_jobs)} "
-                      f"| GA={elapsed*1000:.0f}ms")
+                if best_ind is None:
+                    print("[AI] Background task failed. Resuming simulation without updates.")
+                    is_computing = False
+                else:
+                    # Apply the new schedule
+                    ai_env.sim.assign_schedules(
+                        best_ind.order, best_ind.amr_assignment, job_map
+                    )
+                    ai_env.last_resched_t = float(ai_env.sim.t)
+                    ai_env.last_resched_version = ai_env.arrival_version
+                    ai_env.last_resched_completion_count = len(ai_env.completed_jobs)
+                    is_computing = False
+                    total_reschedule_count += 1
+                    last_action_str = f"RESCHEDULE (GA={elapsed*1000:.0f}ms)"
+                    write_schedule_outbox()
+                    print(f"[AI] t={ai_env.sim_time:.1f}  RESCHEDULE #{total_reschedule_count} "
+                          f"| active={len(ai_env.active_jobs)} "
+                          f"| done={len(ai_env.completed_jobs)} "
+                          f"| GA={elapsed*1000:.0f}ms")
             except Empty:
                 pass
 
-            # 5) AI decision — only when not already computing and sim stepped
+            # 5) AI decision — purely model-driven for testing
             if not is_computing and steps_this_tick > 0:
                 action = get_ai_action()
+                
                 if action == 1 and ai_env.can_reschedule():
                     start_background_ga()
                 elif action == 0:
                     last_action_str = "WAIT"
 
-            # 6) Refresh AMR lane visuals (shows jobs completing in real time)
-            if steps_this_tick > 0:
-                update_amr_lanes_from_sim(ax)
-
-            # 7) Remove scheduled and completed jobs from the visual top queue
+            # 6) Rebuild top visual queue based on current unscheduled jobs
             scheduled_jids = set()
             if ai_env:
                 for amr_id in ai_env.sim.amr_queues:
@@ -522,13 +665,40 @@ def main():
                     for qj in ai_env.sim.amr_queues[amr_id]:
                         scheduled_jids.add(qj.idx)
                 
+                # Keep frozen jobs visually "scheduled" so they don't bounce to the top panel
+                if is_computing:
+                    for amr, vq in visual_amr_queues.items():
+                        for qj in vq:
+                            scheduled_jids.add(qj.idx)
+                
                 done_jids = {j.jid for j in ai_env.completed_jobs}
                 exclude_jids = scheduled_jids.union(done_jids)
                 
-                old_len = len(jobs_top)
-                jobs_top[:] = [j for j in jobs_top if j.jid not in exclude_jids]
-                if len(jobs_top) != old_len:
+                # # DEBUG: Print ID comparison every 10 sim-seconds
+                # if steps_this_tick > 0 and int(simulation_time) % 10 == 0 and len(jobs_top) > 0:
+                #     top_jids = {j.jid for j in jobs_top}
+                #     print(f"[DEBUG t={simulation_time:.0f}] jobs_top jids={sorted(top_jids)} | "
+                #           f"scheduled_jids={sorted(scheduled_jids)} | "
+                #           f"done_jids={sorted(done_jids)} | "
+                #           f"is_computing={is_computing}")
+                #     # Also show queue contents
+                #     for amr_id_dbg in ai_env.sim.amr_queues:
+                #         q = ai_env.sim.amr_queues[amr_id_dbg]
+                #         st = ai_env.sim.amr_states[amr_id_dbg]
+                #         active = st['job'].idx if st['job'] is not None else None
+                #         q_ids = [qj.idx for qj in q]
+                #         print(f"  {amr_id_dbg}: active={active}, queue={q_ids}, mode={st['mode']}")
+                
+                jobs_top_jids_before = {j.jid for j in jobs_top}
+                jobs_top[:] = [vj for vj in all_visual_jobs if vj.jid not in exclude_jids]
+                jobs_top_jids_after = {j.jid for j in jobs_top}
+                
+                if jobs_top_jids_before != jobs_top_jids_after:
                     rebuild_top_lane(ax)
+
+            # 7) Refresh AMR lane visuals (shows jobs completing in real time)
+            if steps_this_tick > 0:
+                update_amr_lanes_from_sim(ax)
 
             # 8) Check end condition
             done = (ai_env.sim_time >= CONFIG['SIM_TIME']) or \
@@ -540,6 +710,7 @@ def main():
                 print(f"  Reschedules: {total_reschedule_count}")
 
             update_title(ax)
+            write_amr_state()
             fig.canvas.draw_idle()
 
         timer.start()

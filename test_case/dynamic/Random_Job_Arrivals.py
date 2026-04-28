@@ -3,10 +3,10 @@ import random
 import math
 
 # --- Configuration ---
-NUM_EPISODES = 1000         # Total training episodes
+NUM_EPISODES = 10         # Total training episodes
 EPISODE_DURATION = 400.0    # Duration of one episode (sim-seconds)
-MEAN_ARRIVAL_TIME = 4.0    # Average seconds between jobs (Poisson Lambda)
-OUTPUT_FILE = "training_dataset_r4.jsonl"
+MEAN_ARRIVAL_TIME = 6.0    # Average seconds between jobs (Poisson Lambda)
+OUTPUT_FILE = "test_dataset_demo.jsonl"
 
 # --- Domain Constants ---
 JOB_TYPES = ["A", "B", "C"]

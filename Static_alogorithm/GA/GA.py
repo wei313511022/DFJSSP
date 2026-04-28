@@ -148,6 +148,38 @@ def shortest_path(start: Tuple[int, int], end: Tuple[int, int]) -> List[Tuple[in
                 
     return _manhattan_path(start, end)
 
+def shortest_path_avoiding(start: Tuple[int, int], end: Tuple[int, int],
+                           extra_blocked: set) -> List[Tuple[int, int]]:
+    """A* shortest path avoiding OBSTACLES + extra_blocked cells.
+    The goal cell is never blocked so the AMR can approach it."""
+    if start == end:
+        return [start]
+    blocked = OBSTACLES | extra_blocked
+    blocked.discard(end)    # always allow reaching the goal
+    blocked.discard(start)  # don't block our own position
+
+    open_set = []
+    heapq.heappush(open_set, (heuristic(start, end), 0, start))
+    came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+    g_score = {start: 0}
+
+    while open_set:
+        _, g, current = heapq.heappop(open_set)
+        if current == end:
+            return _build_path(came_from, end)
+        for dx, dy in _DELTAS:
+            neighbor = (current[0] + dx, current[1] + dy)
+            if not _is_within_bounds(neighbor) or neighbor in blocked:
+                continue
+            new_g = g + 1
+            if neighbor not in g_score or new_g < g_score[neighbor]:
+                g_score[neighbor] = new_g
+                f = new_g + heuristic(neighbor, end)
+                heapq.heappush(open_set, (f, new_g, neighbor))
+                came_from[neighbor] = current
+
+    return [start]  # no path found — stay in place
+
 # Dynamic A* for collision avoidance
 def find_dynamic_path(start: Tuple[int, int], end: Tuple[int, int], start_time: float, 
                      reservations: Dict[Tuple[Tuple[int, int], int], str], amr_states: Dict[str, Tuple[Tuple[int, int], float]], 
@@ -611,106 +643,116 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
                         if need_log: s['route_start'] = t
                         s['job'] = None
 
-        # 2. Movement Negotiation
+        # 2. Movement — priority: processing > lexicographical
         moves = {}
-        def prio(amr):
-            m = amr_states[amr]['mode']
-            if m == 'processing' or m == 'processing_old': return 100
-            if m == 'idle': return 10
-            if m == 'moving_station': return 50
-            if m == 'moving_supply': return 40
-            return 30
-            
-        ordered = sorted(AMR_KEYS, key=prio, reverse=True)
-        reserved = set()
+        occupied = set()  # cells claimed as DESTINATIONS by higher-priority AMRs
+
+        def get_prio(amr_id):
+            m = amr_states[amr_id]['mode']
+            if m in ['processing', 'processing_old']: return 0
+            return 1
         
-        for amr in ordered:
-            m = amr_states[amr]['mode']
+        ordered_amrs = sorted(AMR_KEYS, key=lambda a: (get_prio(a), a))
+
+        for amr in ordered_amrs:
+            s = amr_states[amr]
             p = positions[amr]
-            
-            # If we are idle, but we happen to be standing exactly on top of a station tile,
-            # we are blocking it. We must step off it immediately.
-            is_blocking_station = False
-            is_blocking_highway = False
-            if m == 'idle':
-                for st_pos in STATIONS.values():
-                    if p == st_pos:
-                        is_blocking_station = True
-                        break
-                # (2, y) is the main highway. Idle AMRs should yield out of it if possible
-                if p[0] == 2:
-                    is_blocking_highway = True
-            
-            if m == 'processing' or m == 'processing_old':
+
+            # Stationary modes: reserve position and skip
+            if s['mode'] in ['processing', 'processing_old']:
                 moves[amr] = p
-                reserved.add(p)
-            elif m == 'idle' and not is_blocking_station and not is_blocking_highway and p == amr_states[amr].get('goal', p):
-                moves[amr] = p
-                reserved.add(p)
-            elif m == 'moving_station' and p == amr_states[amr]['goal']:
-                moves[amr] = p
-                reserved.add(p)
-                
-        for amr in ordered:
-            if amr in moves: continue
-            
-            p = positions[amr]
-            
-            # Use dodge_goal if active
-            g = amr_states[amr].get('goal')
+                occupied.add(p)
+                continue
+
+            # Determine goal
+            g = s.get('goal')
             if g is None:
                 g = p
-            if amr_states[amr].get('dodge_ticks', 0) > 0:
-                g = amr_states[amr]['dodge_goal']
-                amr_states[amr]['dodge_ticks'] -= 1
-                
-            path = shortest_path(p, g)
-            next_step = path[1] if len(path) > 1 else p
-            
-            if next_step in reserved:
-                moves[amr] = p
-                reserved.add(p)
-            else:
-                swap = False
-                for o_amr, o_next in moves.items():
-                    if o_next == p and positions[o_amr] == next_step:
-                        swap = True
+            if s.get('dodge_ticks', 0) > 0:
+                g = s['dodge_goal']
+                s['dodge_ticks'] -= 1
+
+            # If idle at goal with nothing to do, check if blocking
+            if p == g and s['mode'] == 'idle' and p not in occupied:
+                is_blocking = False
+                for st_pos in STATIONS.values():
+                    if p == st_pos:
+                        is_blocking = True
                         break
-                if swap:
+                if not is_blocking and p[0] != 2:  # not on highway
                     moves[amr] = p
-                    reserved.add(p)
+                    occupied.add(p)
+                    continue
+
+            # Build blocked set:
+            # - All destinations claimed by higher-priority AMRs
+            # - Old positions of higher-priority AMRs that are MOVING AWAY
+            #   (prevents swapping into where they came from)
+            extra_blocked = occupied.copy()
+            extra_blocked.discard(p)
+            for o_amr in ordered_amrs:
+                if o_amr == amr:
+                    break
+                o_old = positions[o_amr]
+                o_new = moves.get(o_amr, o_old)
+                if o_old != o_new:
+                    extra_blocked.add(o_old)
+
+            path = shortest_path_avoiding(p, g, extra_blocked)
+            next_step = path[1] if len(path) > 1 else p
+
+            is_swap = False
+            for o_amr, o_next in moves.items():
+                if o_next == p and positions[o_amr] == next_step:
+                    is_swap = True
+                    break
+
+            must_dodge = False
+            if is_swap or p in occupied:
+                must_dodge = True
+                
+            if must_dodge:
+                if next_step != p and next_step not in occupied and next_step not in extra_blocked:
+                    pass # A* gave us a safe escape route
                 else:
-                    moves[amr] = next_step
-                    reserved.add(next_step)
-            
-            # Identify deadlocks where we wanted to move but couldn't
-            if moves[amr] == p and next_step != p:
-                s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
-                if s['blocked_ticks'] > 5 and m in ['moving_supply', 'moving_station', 'moving_base', 'idle']:
+                    # Emergency dodge: find a safe adjacent tile
+                    best_dodge = None
+                    best_dist = float('inf')
+                    for dx, dy in [(0,1),(1,0),(0,-1),(-1,0)]:
+                        adj = (p[0]+dx, p[1]+dy)
+                        if not _is_within_bounds(adj) or adj in OBSTACLES: continue
+                        if adj in occupied or adj in extra_blocked: continue
+                        
+                        dist = abs(adj[0] - g[0]) + abs(adj[1] - g[1])
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_dodge = adj
                     
-                    if m == 'moving_base':
-                        # If we are just returning to base, and we are blocking traffic, 
-                        # just pick a completely random free tile far away from the middle to park at instead!
-                        possible_dodges = []
-                        for dy in [0, 1, 8, 9]:
-                            for dx in range(0, GRID_MAX_X + 1):
-                                dpos = (dx, dy)
-                                if dpos not in OBSTACLES:
-                                    possible_dodges.append(dpos)
-                        if possible_dodges:
-                            s['goal'] = random.choice(possible_dodges)
-                            s['blocked_ticks'] = 0
+                    if best_dodge:
+                        next_step = best_dodge
                     else:
-                        possible_dodges = []
-                        for dy in range(-3, 4):
-                            for dx in range(-3, 4):
-                                dpos = (p[0]+dx, p[1]+dy)
-                                if _is_within_bounds(dpos) and dpos not in OBSTACLES:
-                                    possible_dodges.append(dpos)
-                        if possible_dodges:
-                            # Pick a random clear tile nearby as a temporary dodge goal
-                            s['dodge_goal'] = random.choice(possible_dodges)
-                            s['dodge_ticks'] = 15  # pursue this dodge goal for 15 ticks
+                        next_step = p # Trapped
+            else:
+                if next_step in occupied:
+                    next_step = p
+            
+            moves[amr] = next_step
+            occupied.add(next_step)
+
+            # Wait patiently if blocked, unless returning to base
+            m = s['mode']
+            if moves[amr] == p and g != p:
+                s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
+                if s['blocked_ticks'] > 5 and m == 'moving_base':
+                    possible_dodges = []
+                    for dy in [0, 1, 8, 9]:
+                        for dx in range(0, GRID_MAX_X + 1):
+                            dpos = (dx, dy)
+                            if dpos not in OBSTACLES:
+                                possible_dodges.append(dpos)
+                    if possible_dodges:
+                        s['goal'] = random.choice(possible_dodges)
+                        s['blocked_ticks'] = 0
             else:
                 s['blocked_ticks'] = 0
                     
@@ -1178,4 +1220,3 @@ if __name__ == "__main__":
             writer.writerow(["Event_Index", "Makespan", "Computation_Time"])
             writer.writerows(results_data)
         print(f"\nSummary results saved to {output_filename}")
-

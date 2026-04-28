@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
-# Simple AMR Runtime (move-only version, priority-aware, with material stations + inventory)
-# - Reads assignments from schedule_outbox.jsonl
-# - Each line: {"generated_at", "amr", "jid", "type", "proc_time", "station"}
-# - Each AMR keeps a queue of jobs.
-# - For each job:
-#   * AMR carries up to MATERIAL_CAPACITY units of each material type (A/B/C).
-#   * If it has stock for that job type, it goes directly to the production station.
-#   * If it has no stock for that job type, it goes to the material station first, then to production.
-# - Priority:
-#   AMR1: highest, ignores other AMRs.
-#   AMR2: sees AMR1 as obstacle, ignores AMR3.
-#   AMR3: sees AMR1 and AMR2 as obstacles.
-# - Replans routes every tick.
-# - SPACE to pause/resume.
+"""
+AMR State Viewer — Pure renderer driven by amr_state.json
+
+Reads the authoritative AMR state written by Dynamic_Pairing_Demo.py or
+Fix_Pairing_Demo.py and renders positions, A* routes, and status.
+No physics simulation is performed here; this is a "dumb view".
+
+Controls:
+  SPACE  — pause/resume rendering (the producer still runs)
+"""
 
 import os
 import json
 import math
-import heapq
-from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Optional, Set
+from typing import Dict, Tuple, Optional, Set, List
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 
 # ---------- Files ----------
-SCHEDULE_INBOX = "../Random_Job_Arrivals/models/schedule_outbox.jsonl"
+AMR_STATE_FILE = "../Random_Job_Arrivals/models/amr_state.json"
 
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 11
 
-START_POS:  Dict[int, Tuple[int, int]] = {
-    3: (2.0, 2.0),
-    2: (2.0, 5.0),
-    1: (2.0, 8.0),
+START_POS: Dict[int, Tuple[int, int]] = {
+    3: (2, 2),
+    2: (2, 5),
+    1: (2, 8),
 }
 
 # Production stations (right side).
@@ -52,772 +46,39 @@ MAT_POS: Dict[str, Tuple[int, int]] = {
     "A": (0, 8),
 }
 
-ALL_STATIONS: Set[Tuple[int, int]] = {
-    (9, 1),
-    (9, 3),
-    (9, 5),
-    (9, 7),
-    (9, 9),
-    (0, 2),
-    (0, 5),
-    (0, 8),
-}
-
-# Optional: static obstacles
+# Static obstacles
 OBSTACLES: Set[Tuple[int, int]] = {
-    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),(6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1), (2, 3)
+    (5, 1),(5, 2),(6, 1),(6, 2),(4, 5),(3, 5),(3,8),
+    (6, 4),(6, 5),(6, 8),(6, 9),(4,6),(3,1), (2, 3)
 }
 
-
-# Dynamic AMR occupancy: holds (x, y) int grid cells where AMRs currently are
-AMR_LOCATIONS: Set[Tuple[int, int]] = set()
-
-# ---------- Simulation timing / motion ----------
-UPDATE_INTERVAL_MS = 1000         # timer tick in ms
-SIM_SPEED_MULT     = 1         # speed-up factor
-CELLS_PER_SEC      = 1.0        # grid cells per simulated second
-
-AMR_COUNT = 3                    # number of AMRs
-
-# Each AMR can carry up to this many units of each material type
+# ---------- Config ----------
+UPDATE_INTERVAL_MS = 200   # poll rate in ms
 MATERIAL_CAPACITY = 3
-REFILL_CAPACITY = 3
-
-Coord = Tuple[int, int]
-
-# Global axis for drawing dashed paths
-_AX = None
-
-# Track how many lines we already consumed from SCHEDULE_INBOX
-_lines_consumed = 0
-_first_line_timestamp = None
-
-# ---------- Data models ----------
-
-@dataclass
-class Job:
-    jid: int
-    station: int      # production station index (1, 2, 3)
-    jtype: str        # A/B/C, used to pick material station
-    proc_time: float  # not used yet, just kept for future
-
-
-def _default_inventory() -> Dict[str, int]:
-    # Start each AMR with full stock of all materials.
-    return {"A": MATERIAL_CAPACITY, "B": MATERIAL_CAPACITY, "C": MATERIAL_CAPACITY}
-
-
-@dataclass
-class AMRState:
-    amr_id: int
-    posx: float
-    posy: float
-    nxt_posx: float
-    nxt_posy: float
-    state: str = "idle"           # "idle" | "move" | "processing" | "waiting"
-    blocked: bool = False
-    queue: List[Job] = field(default_factory=list)
-
-    # current job + phase
-    job: Optional[Job] = None     # job currently being served
-    phase: Optional[str] = None   # None | "supply" | "deliver"
-
-    # material inventory: how many units of each type we currently carry
-    inventory: Dict[str, int] = field(default_factory=_default_inventory)
-
-    # path following
-    path: List[Coord] = field(default_factory=list)
-    waypoint_idx: int = 0
-    move_budget: float = 0.0
-
-    # processing timer
-    proc_remaining: float = 0.0
-
-    # waiting for destination to free up
-    waiting_goal: Optional[Coord] = None
-
-    # visuals
-    marker: Optional[Circle] = None
-    label: Optional[plt.Text] = None
-    route_artist: Optional[plt.Line2D] = None  # dashed path line
-    route_color: str = "black"                 # fixed color per AMR for path line
-
-
-# ---------- Helpers ----------
-
-def in_bounds(x: int, y: int) -> bool:
-    return 0 <= x < GRID_W and 0 <= y < GRID_H
-
-
-def cur_cell(a: AMRState) -> Coord:
-    return (round(a.posx), round(a.posy))
-
-
-def octile(a: Coord, b: Coord) -> float:
-    """Heuristic distance for 8-direction movement."""
-    dx, dy = abs(a[0] - b[0]), abs(a[1] - b[1])
-    D, D2 = 1.0, math.sqrt(2.0)
-    return D * (dx + dy) + (D2 - 2 * D) * min(dx, dy)
-
-
-def reconstruct_path(came_from: Dict[Coord, Coord],
-                     start: Coord,
-                     goal: Coord) -> List[Coord]:
-    if goal not in came_from and goal != start:
-        return []
-    path = [goal]
-    cur = goal
-    while cur != start:
-        cur = came_from[cur]
-        path.append(cur)
-    path.reverse()
-    return path
-
-
-# ---------- Priority helper ----------
-
-def amr_priority(amr_id: int) -> int:
-    """
-    Larger value = higher priority.
-    With AMR IDs 1,2,3:
-      AMR1 -> priority -1  (highest)
-      AMR2 -> -2
-      AMR3 -> -3  (lowest)
-    We will treat other AMRs as obstacles IFF their priority is higher.
-    """
-    return -amr_id
-
-
-# ---------- A* (8-direction, static + dynamic obstacles) ----------
-
-def astar_8dir(start: Coord,
-               goal: Coord,
-               blocked: Set[Coord]) -> List[Coord]:
-    if start == goal:
-        return [start]
-    # if start in blocked or goal in blocked:
-    if start in blocked:
-        return []
-    
-
-    STEPS = [
-        (1, 0, 1.0), (-1, 0, 1.0),
-        (0, 1, 1.0), (0, -1, 1.0),
-        # (1, 1, math.sqrt(2)),  (-1, 1, math.sqrt(2)),
-        # (1, -1, math.sqrt(2)), (-1, -1, math.sqrt(2)),
-    ]
-
-    def can_move(x: int, y: int, dx: int, dy: int) -> bool:
-        nx, ny = x + dx, y + dy
-        if not in_bounds(nx, ny) or (nx, ny) in blocked:
-            return False
-        # prevent diagonal corner-cutting
-        if dx != 0 and dy != 0 and (
-            (x + dx, y) in blocked or (x, y + dy) in blocked
-        ):
-            return False
-        return True
-
-    openh = []
-    heapq.heappush(openh, (octile(start, goal), 0.0, start))
-    came: Dict[Coord, Coord] = {}
-    gscore = {start: 0.0}
-    closed: Set[Coord] = set()
-
-    while openh:
-        _, gs, cur = heapq.heappop(openh)
-        if cur in closed:
-            continue
-        if cur == goal:
-            return reconstruct_path(came, start, goal)
-        closed.add(cur)
-
-        x, y = cur
-        for dx, dy, base in STEPS:
-            if not can_move(x, y, dx, dy):
-                continue
-            nxt = (x + dx, y + dy)
-            ns = gs + base
-            if ns < gscore.get(nxt, math.inf):
-                came[nxt] = cur
-                gscore[nxt] = ns
-                heapq.heappush(openh, (ns + octile(nxt, goal), ns, nxt))
-    return []
-
-
-# ---------- Route drawing ----------
-
-def _update_route_artist(amr: AMRState):
-    """Draw/refresh dashed route line for the AMR's current path."""
-    global _AX
-    if _AX is None:
-        return
-    # Remove previous route
-    if amr.route_artist is not None:
-        try:
-            amr.route_artist.remove()
-        except Exception:
-            pass
-        amr.route_artist = None
-
-    if not amr.path or len(amr.path) <= 1:
-        return
-
-    xs = [p[0] for p in amr.path]
-    ys = [p[1] for p in amr.path]
-
-    color = getattr(amr, "route_color", "black")
-
-    (line,) = _AX.plot(
-        xs, ys,
-        linestyle="--",
-        linewidth=1.5,
-        alpha=0.7,
-        zorder=4,
-        color=color,
-    )
-    amr.route_artist = line
-
-
-# ---------- Path planning (material + station, priority-aware) ----------
-
-def _build_blocked_for(amr: AMRState, amrs: Dict[int, AMRState]) -> Set[Coord]:
-    """Build blocked set for this AMR, considering static obstacles + higher-priority AMRs."""
-    blocked = set(OBSTACLES)
-    my_pri = amr_priority(amr.amr_id)
-
-    for other_id, other in amrs.items():
-        if other_id == amr.amr_id:
-            continue
-        ocell = cur_cell(other)
-
-        # Always block AMRs parked on stations, or ones marked 'blocked'
-        if ocell in ALL_STATIONS or other.blocked:
-            blocked.add(ocell)
-
-        # Higher-priority AMRs: block both their current cell AND their next intended cell.
-        # This prevents lower-priority AMRs from planning paths through occupied cells,
-        # which would cause infinite swap (head-on) deadlocks.
-        if amr_priority(other_id) > my_pri:
-            if in_bounds(*ocell):
-                blocked.add(ocell)  # block current position
-
-            if (
-                other.state == "move"
-                and other.path
-                and 0 <= other.waypoint_idx < len(other.path)
-            ):
-                nxt = other.path[other.waypoint_idx]
-                if in_bounds(*nxt):
-                    blocked.add(nxt)  # also block intended next cell
-
-    # Don't treat our own current cell as blocked
-    c = cur_cell(amr)
-    if c in blocked:
-        blocked.remove(c)
-    return blocked
-
-
-
-def _plan_path_with_parking(amr: AMRState,
-                            amrs: Dict[int, AMRState],
-                            goal: Coord):
-    start = cur_cell(amr)
-    blocked = _build_blocked_for(amr, amrs)
-
-    occupied_by_other = any(
-        (cur_cell(o) == goal and o.amr_id != amr.amr_id)
-        for o in amrs.values()
-    )
-
-    # 目標目前不能進去 → 找旁邊的「停車格」
-    if goal in blocked or occupied_by_other:
-        cand_cells = [
-            (goal[0] + 1, goal[1]),
-            (goal[0] - 1, goal[1]),
-            (goal[0], goal[1] + 1),
-            (goal[0], goal[1] - 1),
-        ]
-        best_path = None
-
-        for cx, cy in cand_cells:
-            if not in_bounds(cx, cy) or (cx, cy) in blocked:
-                continue
-
-            p = astar_8dir(start, (cx, cy), blocked)
-            # ★ 必須確定路徑真的有「走一步以上」，才能接受
-            if p and len(p) > 1:
-                if best_path is None or len(p) < len(best_path):
-                    best_path = p
-
-        if best_path is not None:
-            amr.path = best_path
-            amr.blocked = False
-            amr.waypoint_idx = 1  # index 0 是目前所在格
-            amr.move_budget = 0.0  # ★ 換新路徑時清掉舊的 budget
-            amr.waiting_goal = goal  # remember the intended goal
-            _update_route_artist(amr)
-            return
-
-        # 連停在旁邊一格都找不到路 → 視為 blocked
-        amr.path = []
-        amr.blocked = True
-        amr.waypoint_idx = 0
-        amr.move_budget = 0.0      # ★ 避免累積
-        _update_route_artist(amr)
-        return
-
-    # 目標沒被佔 → 正常規劃到 goal
-    path = astar_8dir(start, goal, blocked)
-
-    # ★ 同樣檢查：沒路 or 只有自己這一格 → 當作 blocked，避免瞬移
-    if not path or len(path) <= 1:
-        amr.path = []
-        amr.blocked = True
-        amr.waypoint_idx = 0
-        amr.move_budget = 0.0
-        _update_route_artist(amr)
-        return
-
-    amr.path = path
-    amr.blocked = False
-    amr.waypoint_idx = 1
-    amr.move_budget = 0.0          # ★ 換路徑時也清掉 budget
-    amr.waiting_goal = None         # going directly to goal
-    _update_route_artist(amr)
-
-
-def plan_path_to_home(amr: AMRState, amrs: Dict[int, AMRState]):
-    """Plan a path from current AMR position back to its start position."""
-    home = START_POS.get(amr.amr_id)
-    if home is None:
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        return
-    _plan_path_with_parking(amr, amrs, home)
-
-
-def plan_path_to_material(amr: AMRState, amrs: Dict[int, AMRState]):
-    """Plan a path from current AMR position to its material station (based on job type)."""
-    if amr.job is None:
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        return
-
-    jtype = amr.job.jtype.upper()
-    if jtype not in MAT_POS:
-        print(f"[warn] no material station for job type {jtype} (AMR{amr.amr_id})")
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        return
-
-    goal = MAT_POS[jtype]
-    _plan_path_with_parking(amr, amrs, goal)
-
-
-def plan_path_to_station(amr: AMRState,
-                         station_id: int,
-                         amrs: Dict[int, AMRState]):
-    """Plan a path from current AMR position to the given production station, with priority-aware obstacles."""
-    start = cur_cell(amr)
-    if station_id not in STATION_POS:
-        print(f"[warn] unknown station {station_id} for AMR{amr.amr_id}")
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        return
-    goal = STATION_POS[station_id]
-    _plan_path_with_parking(amr, amrs, goal)
-
-
-# ---------- Assignment ingestion ----------
-
-def ingest_new_assignments(amrs: Dict[int, AMRState]) -> bool:
-    """Read any new JSON lines from SCHEDULE_INBOX and append jobs to AMR queues."""
-    global _lines_consumed, _first_line_timestamp
-    if not os.path.exists(SCHEDULE_INBOX):
-        return False
-
-    with open(SCHEDULE_INBOX, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    if not lines:
-        return False
-
-    # Robust Truncation Detection: 
-    # Check if the very first line's timestamp changed, meaning the file was fully rewritten.
-    try:
-        first_time = json.loads(lines[0].strip()).get("generated_at")
-        if first_time is not None:
-            if _first_line_timestamp is not None and first_time != _first_line_timestamp:
-                print("[info] Schedule file completely rewritten! Clearing queues.")
-                _lines_consumed = 0
-                for amr in amrs.values():
-                    amr.queue.clear()
-            _first_line_timestamp = first_time
-    except Exception:
-        pass
-
-    if _lines_consumed >= len(lines):
-        return False
-
-    new_lines = lines[_lines_consumed:]
-    _lines_consumed = len(lines)
-
-    added = 0
-    for raw in new_lines:
-        ln = raw.strip()
-        if not ln:
-            continue
-        try:
-            rec = json.loads(ln)
-            amr_id    = int(rec["amr"])
-            jid       = int(rec["jid"])
-            jtype     = str(rec.get("type", "A")).upper()
-            proc_time = float(rec.get("proc_time", 0.0))
-            station   = int(rec["station"])
-
-            if amr_id not in amrs:
-                print(f"[warn] assignment for unknown AMR {amr_id}: {ln}")
-                continue
-
-            # If the AMR is already actively processing/moving for this exact same job, 
-            # do not add it to the queue again!
-            if amrs[amr_id].job is not None and amrs[amr_id].job.jid == jid:
-                continue
-
-            job = Job(jid=jid, station=station, jtype=jtype, proc_time=proc_time)
-            amrs[amr_id].queue.append(job)
-            added += 1
-
-        except Exception as e:
-            print(f"[warn] bad assignment JSON: {e} | line={ln!r}")
-
-    # If any new jobs arrived, try to start movement for idle AMRs
-    if added > 0:
-        for amr in amrs.values():
-            if amr.state == "idle" and amr.job is None:
-                # **********
-                # amr.blocked = True
-                # **********
-                try_start_next_job(amr, amrs)
-    return added > 0
-
-
-def try_start_next_job(amr: AMRState, amrs: Dict[int, AMRState]) -> bool:
-    """
-    Decide what to do for the next job:
-      - If we have inventory for that job type: go directly to station ("deliver" phase).
-      - If we have NO inventory for that job type: go to material station first ("supply" phase).
-    """
-    if amr.state != "idle" or amr.job is not None or not amr.queue:
-        return False
-
-    amr.job = amr.queue.pop(0)
-    jtype = amr.job.jtype
-    have = amr.inventory.get(jtype, 0)
-    dest = STATION_POS[amr.job.station]
-
-    if have <= 0:
-        # Need to resupply first
-        amr.phase = "supply"
-        dest = MAT_POS[jtype]
-        # plan_path_to_material(amr, amrs)
-    else:
-        # Already carrying material, go directly to production station
-        amr.phase = "deliver"
-        dest = STATION_POS[amr.job.station]
-        # plan_path_to_station(amr, amr.job.station, amrs)
-
-    if cur_cell(amr) != dest:
-        amr.blocked = False  # not blocking while moving
-        amr.state = "move"
-    else:
-        # Path not found or already at target; treat as immediate arrival
-        on_arrival(amr, amrs)
-    return True
-
-
-def on_arrival(amr: AMRState, amrs: Dict[int, AMRState]):
-    """
-    Called when an AMR has finished its path.
-    Two-leg logic with inventory:
-      - phase == "supply": we just arrived at material station -> refill inventory for this job type, then go deliver.
-      - phase == "deliver": we just arrived at production station -> consume 1 unit of material and finish the job.
-    """
-    if amr.phase == "go_home":
-        print(f"[info] AMR{amr.amr_id} arrived home at {cur_cell(amr)}")
-        amr.state = "idle"
-        amr.blocked = False
-        amr.phase = None
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        try_start_next_job(amr, amrs)
-        return
-    
-    if amr.job is None:
-        amr.state = "idle"
-        # amr.blocked = True
-        amr.phase = None
-        amr.path = []
-        amr.waypoint_idx = 0
-        _update_route_artist(amr)
-        return
-
-    jtype = amr.job.jtype
-
-    if amr.phase == "supply":
-        # arrived at material station, refill this material type
-        old = amr.inventory.get(jtype, 0)
-        amr.inventory[jtype] = REFILL_CAPACITY
-        print(f"[info] AMR{amr.amr_id} refilled material {jtype}: {old} -> {amr.inventory[jtype]}")
-
-        # now go deliver
-        amr.phase = "deliver"
-        # plan_path_to_station(amr, amr.job.station, amrs)
-        if cur_cell(amr) != STATION_POS.get(amr.job.station, (-1, -1)):
-            amr.state = "move"
-        else:
-            # already at station or blocked in a weird way
-            print(f"[info] AMR{amr.amr_id} instantly finished job {amr.job.jid} at station {amr.job.station} after refuel")
-            # consume one unit
-            amr.inventory[jtype] = max(0, amr.inventory.get(jtype, 0) - 1)
-            amr.job = None
-            amr.phase = None
-            amr.state = "idle"
-            amr.blocked = False
-            amr.path = []
-            amr.waypoint_idx = 0
-            _update_route_artist(amr)
-            try_start_next_job(amr, amrs)
-        return
-
-    if amr.phase == "deliver":
-        # Arrived at production station -> start processing or finish instantly if proc_time=0
-        jtype = amr.job.jtype
-        if amr.job.proc_time > 0:
-            # Start processing
-            amr.proc_remaining = amr.job.proc_time
-            amr.state = "processing"
-            amr.blocked = True  # block the station while processing
-            print(f"[info] AMR{amr.amr_id} started processing job {amr.job.jid} at station {amr.job.station} for {amr.proc_remaining:.1f}s")
-        else:
-            # Instant finish
-            before = amr.inventory.get(jtype, 0)
-            amr.inventory[jtype] = max(0, before - 1)
-            print(
-                f"[info] AMR{amr.amr_id} delivered job {amr.job.jid} to station {amr.job.station} "
-                f"(material {jtype}: {before} -> {amr.inventory[jtype]})"
-            )
-            amr.job = None
-            amr.phase = None
-            amr.state = "idle"
-            amr.path = []
-            amr.waypoint_idx = 0
-            _update_route_artist(amr)
-            # Start next job if any
-            try_start_next_job(amr, amrs)
-        return
-
-        
-
-    # Fallback: unknown phase
-    amr.state = "idle"
-    amr.blocked = False
-    amr.phase = None
-    amr.path = []
-    amr.waypoint_idx = 0
-    _update_route_artist(amr)
-
-
-# ---------- Motion ----------
-
-def simple_step(amrs: Dict[int, AMRState], dt: float):
-    # Replan routes for moving AMRs each tick (priority-aware obstacles)
-    for i in range(2):
-        for st in amrs.values():
-            if st.state == "move" and st.job is not None:
-                if st.phase == "supply":
-                    plan_path_to_material(st, amrs)
-                elif st.phase == "deliver":
-                    plan_path_to_station(st, st.job.station, amrs)
-            elif st.phase == "go_home":
-                plan_path_to_home(st, amrs)
-            elif (
-                st.state == "idle"
-                and st.job is None
-                and not st.queue
-                and st.phase is None
-            ):
-                cell = cur_cell(st)
-                home = START_POS.get(st.amr_id)
-                # 只在「站點上」且「不在家」的時候啟動回家
-                if (
-                    home is not None
-                    and cell != home
-                    and (cell in STATION_POS.values() or cell in MAT_POS.values())
-                ):
-                    st.phase = "go_home"
-                    st.blocked = False
-                    st.state = "move"
-                    plan_path_to_home(st, amrs)
-
-    budget = CELLS_PER_SEC * dt
-    # accumulate budget
-    for st in amrs.values():
-        if st.state == "move" and st.path:
-            st.move_budget += budget
-
-    # ---- Simultaneous move resolution ----
-    # Phase 1: Compute intended next cell for every moving AMR
-    intended: Dict[int, Coord] = {}  # amr_id → intended next cell
-    for st in amrs.values():
-        if (
-            st.state == "move"
-            and st.move_budget >= CELLS_PER_SEC * dt
-            and st.waypoint_idx < len(st.path)
-        ):
-            intended[st.amr_id] = st.path[st.waypoint_idx]
-
-    # Phase 2: Detect swap (head-on) collisions
-    # A swap: AMR-A wants B's current cell, and AMR-B wants A's current cell
-    blocked_ids: set = set()
-    amr_list = sorted(intended.keys())  # sorted by amr_id → lower id = higher priority
-    for i, aid in enumerate(amr_list):
-        if aid in blocked_ids:
-            continue
-        cur_a = cur_cell(amrs[aid])
-        nxt_a = intended[aid]
-        for other_id in amr_list[i + 1:]:
-            if other_id in blocked_ids:
-                continue
-            cur_b = cur_cell(amrs[other_id])
-            nxt_b = intended[other_id]
-            if nxt_a == cur_b and nxt_b == cur_a:
-                # Higher amr_id (lower priority) yields
-                loser = max(aid, other_id)
-                blocked_ids.add(loser)
-                print(f"[collision] Swap detected: AMR{aid}@{cur_a}→{nxt_a} "
-                      f"vs AMR{other_id}@{cur_b}→{nxt_b} | AMR{loser} yields")
-
-    # Phase 3: Block AMRs whose target cell will still be occupied after this tick
-    # "staying" = any AMR that is not in intended, OR is already blocked by swap
-    # We iterate by priority (low amr_id first) so higher-priority moves are resolved first
-    for aid in amr_list:
-        if aid in blocked_ids:
-            continue
-        nxt = intended[aid]
-        # Check if nxt is occupied by an AMR that will NOT move away this tick
-        for other_id, other_st in amrs.items():
-            if other_id == aid:
-                continue
-            if cur_cell(other_st) == nxt:
-                # other AMR is currently in our target cell
-                other_moves_away = (
-                    other_id in intended
-                    and other_id not in blocked_ids
-                )
-                if not other_moves_away:
-                    # nxt will still be occupied → we can't move there
-                    blocked_ids.add(aid)
-                    print(f"[collision] AMR{aid}→{nxt} blocked: "
-                          f"AMR{other_id} stays at {nxt}")
-                    break
-
-    # Phase 4: Apply moves for non-blocked AMRs
-    for st in sorted(amrs.values(), key=lambda a: a.amr_id):
-        if st.amr_id not in intended:
-            continue
-
-        if st.amr_id in blocked_ids:
-            st.move_budget = 0.0  # forfeit budget → replan next tick
-            continue
-
-        nxt = intended[st.amr_id]
-
-        # Update AMR_LOCATIONS
-        AMR_LOCATIONS.discard((round(st.posx), round(st.posy)))
-        st.posx, st.posy = float(nxt[0]), float(nxt[1])
-        AMR_LOCATIONS.add((round(st.posx), round(st.posy)))
-
-        last_step = (st.waypoint_idx == len(st.path) - 1)
-        st.waypoint_idx += 1
-        st.move_budget -= CELLS_PER_SEC * dt
-
-        if last_step:
-            dest = nxt
-
-            is_station = (
-                st.job is not None
-                and dest == STATION_POS.get(st.job.station, (-999, -999))
-            )
-            is_material = (
-                st.job is not None
-                and dest == MAT_POS.get(st.job.jtype.upper(), (-999, -999))
-            )
-            home = START_POS.get(st.amr_id, (-999, -999))
-            is_home = (st.phase == "go_home" and dest == home)
-
-            if is_station or is_material or is_home:
-                on_arrival(st, amrs)
-            else:
-                # Parking next to occupied goal — wait
-                st.path = []
-                st.waypoint_idx = 0
-                st.move_budget = 0.0
-                st.state = "waiting"
-                st.blocked = True
-                _update_route_artist(st)
-
-
-# ---------- Processing logic ----------
-
-    # Handle processing timers
-    for st in amrs.values():
-        if st.state == "processing" and st.proc_remaining > 0:
-            st.proc_remaining -= dt
-            if st.proc_remaining <= 0:
-                # Finish processing
-                st.proc_remaining = 0.0
-                jtype = st.job.jtype
-                before = st.inventory.get(jtype, 0)
-                st.inventory[jtype] = max(0, before - 1)
-                print(
-                    f"[info] AMR{st.amr_id} finished processing job {st.job.jid} at station {st.job.station} "
-                    f"(material {jtype}: {before} -> {st.inventory[jtype]})"
-                )
-                st.job = None
-                st.phase = None
-                st.state = "idle"
-                st.blocked = False  # no longer blocking
-                st.path = []
-                st.waypoint_idx = 0
-                st.waiting_goal = None
-                _update_route_artist(st)
-                try_start_next_job(st, amrs)
-
-
-# ---------- Waiting logic ----------
-
-    # Check waiting AMRs if their goal is now free
-    for st in amrs.values():
-        if st.state == "waiting" and st.waiting_goal is not None:
-            goal = st.waiting_goal
-            occupied_by_other = any(
-                (cur_cell(o) == goal and o.amr_id != st.amr_id)
-                for o in amrs.values()
-            )
-            blocked = _build_blocked_for(st, amrs)
-            if goal not in blocked and not occupied_by_other:
-                # Goal is free, plan path to it
-                _plan_path_with_parking(st, amrs, goal)
-                st.state = "move"
-                st.blocked = False  # no longer blocked
-                st.waiting_goal = None
+AMR_COUNT = 3
+
+# ---------- AMR Visual State ----------
+class AMRVisual:
+    def __init__(self, amr_id: int, x: float, y: float):
+        self.amr_id = amr_id
+        # Authoritative position (from JSON) — no interpolation
+        self.x = x
+        self.y = y
+        # State fields
+        self.mode = "idle"
+        self.phase = None
+        self.goal = None
+        self.path: List[List[int]] = []  # Full A* path
+        self.proc_ticks = 0
+        self.inventory = {"A": 0, "B": 0, "C": 0}
+        self.job_idx = None
+        self.job_type = None
+        self.job_station = None
+        self.queue_jids: list = []
+        # Matplotlib artists
+        self.marker: Optional[Circle] = None
+        self.label: Optional[plt.Text] = None
+        self.route_line: Optional[plt.Line2D] = None
 
 
 # ---------- Drawing ----------
@@ -833,12 +94,9 @@ def draw_static(ax):
     for (x, y) in OBSTACLES:
         ax.add_patch(
             Rectangle(
-                (x - 0.5, y - 0.5),
-                1,
-                1,
+                (x - 0.5, y - 0.5), 1, 1,
                 facecolor=(0.8, 0.8, 0.8),
-                edgecolor="none",
-                zorder=1,
+                edgecolor="none", zorder=1,
             )
         )
 
@@ -846,219 +104,208 @@ def draw_static(ax):
     for sid, (sx, sy) in STATION_POS.items():
         ax.add_patch(
             Rectangle(
-                (sx - 0.5, sy - 0.5),
-                1,
-                1,
-                facecolor="none",
-                edgecolor="tab:red",
-                linewidth=2.0,
-                zorder=2,
+                (sx - 0.5, sy - 0.5), 1, 1,
+                facecolor="none", edgecolor="tab:red",
+                linewidth=2.0, zorder=2,
             )
         )
         ax.text(
-            sx - 0.4,
-            sy + 0.15,
-            f"S{sid}",
-            fontsize=11,
-            color="tab:red",
-            weight="bold",
-            zorder=3,
+            sx - 0.4, sy + 0.15, f"S{sid}",
+            fontsize=11, color="tab:red", weight="bold", zorder=3,
         )
 
     # material stations (blue)
     for jt, (mx, my) in MAT_POS.items():
         ax.add_patch(
             Rectangle(
-                (mx - 0.5, my - 0.5),
-                1,
-                1,
-                facecolor="none",
-                edgecolor="tab:blue",
-                linewidth=2.0,
-                zorder=2,
+                (mx - 0.5, my - 0.5), 1, 1,
+                facecolor="none", edgecolor="tab:blue",
+                linewidth=2.0, zorder=2,
             )
         )
         ax.text(
-            mx - 0.4,
-            my + 0.15,
-            f"M{jt}",
-            fontsize=11,
-            color="tab:blue",
-            weight="bold",
-            zorder=3,
+            mx - 0.4, my + 0.15, f"M{jt}",
+            fontsize=11, color="tab:blue", weight="bold", zorder=3,
         )
 
 
-def create_amrs(ax) -> Dict[int, AMRState]:
-    """Create AMRs at some initial positions."""
-    amrs: Dict[int, AMRState] = {}
-    # simple starting positions; adjust as you like
-    
-
-    # fixed colors per AMR for route lines
+def create_amrs(ax) -> Dict[int, AMRVisual]:
+    """Create AMR visual objects at start positions."""
+    amrs: Dict[int, AMRVisual] = {}
     color_map = {
         1: "tab:red",
         2: "tab:green",
         3: "tab:purple",
-        4: "tab:orange",
-        5: "tab:brown",
     }
 
     for i in range(1, AMR_COUNT + 1):
-        x, y = START_POS.get(i, (1.0, 1.0))
-        st = AMRState(
-            amr_id=i,
-            posx=x,
-            posy=y,
-            nxt_posx=x + 1,
-            nxt_posy=y,
-            route_color=color_map.get(i, "black"),
-            blocked=True,
-        )
-        # Match GNN_DDQN_V7 initial inventory
-        st.inventory = {"A": 0, "B": 0, "C": 0}
-        if i == 1:
-            st.inventory["A"] = MATERIAL_CAPACITY
-        elif i == 2:
-            st.inventory["B"] = MATERIAL_CAPACITY
-        elif i == 3:
-            st.inventory["C"] = MATERIAL_CAPACITY
+        x, y = START_POS.get(i, (1, 1))
+        vis = AMRVisual(amr_id=i, x=float(x), y=float(y))
+
         mk = Circle(
-            (x, y),
-            radius=0.35,
-            facecolor="white",
-            edgecolor="black",
-            linewidth=1.8,
-            zorder=5,
+            (x, y), radius=0.35,
+            facecolor="white", edgecolor="black",
+            linewidth=1.8, zorder=5,
         )
         ax.add_patch(mk)
-        st.marker = mk
+        vis.marker = mk
 
-        # inv = st.inventory
-        # inv_str = f"A{inv['A']} B{inv['B']} C{inv['C']}"
-        st.label = ax.text(
-            x,
-            y + 0.55,
-            f"AMR{i}",
-            fontsize=9,
-            ha="center",
-            va="bottom",
-            zorder=6,
+        vis.label = ax.text(
+            x, y + 0.55, f"AMR{i}",
+            fontsize=9, ha="center", va="bottom", zorder=6,
         )
-        amrs[i] = st
 
-        # record initial location as occupied
-        AMR_LOCATIONS.add((round(x), round(y)))
+        # Route line (dashed, colored per AMR)
+        (line,) = ax.plot([], [], linestyle="--", linewidth=1.5,
+                          alpha=0.7, zorder=4, color=color_map.get(i, "black"))
+        vis.route_line = line
 
+        amrs[i] = vis
     return amrs
+
+
+def update_route_line(vis: AMRVisual):
+    """Draw the full A* path as a dashed line."""
+    if vis.path and len(vis.path) > 1:
+        xs = [p[0] for p in vis.path]
+        ys = [p[1] for p in vis.path]
+        vis.route_line.set_data(xs, ys)
+    else:
+        vis.route_line.set_data([], [])
+
+
+# ---------- State reader ----------
+
+def read_amr_state() -> Optional[dict]:
+    """Read the shared amr_state.json file. Returns None on any error."""
+    try:
+        with open(AMR_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        return None
+
+
+def apply_state(amrs: Dict[int, AMRVisual], state: dict):
+    """Apply the JSON state to the AMR visuals."""
+    amrs_data = state.get("amrs", {})
+    for amr_id_str, data in amrs_data.items():
+        amr_id = int(amr_id_str)
+        if amr_id not in amrs:
+            continue
+        vis = amrs[amr_id]
+
+        # Snap to authoritative position (no interpolation — prevents visual collisions)
+        vis.x = float(data["x"])
+        vis.y = float(data["y"])
+
+        # State fields
+        vis.mode = data.get("mode", "idle")
+        vis.phase = data.get("phase")
+        vis.goal = tuple(data["goal"]) if data.get("goal") else None
+        vis.path = data.get("path", [])
+        vis.proc_ticks = data.get("proc_ticks", 0)
+        vis.inventory = data.get("inventory", {"A": 0, "B": 0, "C": 0})
+        vis.job_idx = data.get("job_idx")
+        vis.job_type = data.get("job_type")
+        vis.job_station = data.get("job_station")
+        vis.queue_jids = data.get("queue_jids", [])
 
 
 # ---------- Main ----------
 
 def main():
-    global _AX
     fig, ax = plt.subplots(figsize=(8, 8))
-    fig.subplots_adjust(bottom=0.2)  # try 0.2 ~ 0.3
-    _AX = ax
+    fig.subplots_adjust(bottom=0.2)
 
     draw_static(ax)
     amrs = create_amrs(ax)
 
-    # Timer text above the map (figure coordinates)
+    # Timer text above the map
     timer_text = fig.text(
-        0.5, 0.9,
-        "Route Map",
-        ha="center",
-        va="bottom",
-        fontsize=16,
-        weight="bold",
+        0.5, 0.9, "Route Map (Viewer)",
+        ha="center", va="bottom", fontsize=16, weight="bold",
         transform=fig.transFigure,
     )
 
     # Status lines under the map for each AMR
     status_texts: Dict[int, plt.Text] = {}
-    base_y = 0.03     # bottom margin
-    line_dy = 0.03    # spacing between lines
+    base_y = 0.03
+    line_dy = 0.03
     for k in sorted(amrs.keys()):
         status_texts[k] = fig.text(
-            0.5,
-            base_y + (4 - k) * line_dy,
-            f"AMR{k}: idle, phase=None, A10 B10 C10",
-            fontsize=14,
-            ha="center",
-            va="bottom",
+            0.5, base_y + (4 - k) * line_dy,
+            f"AMR{k}: waiting for state...",
+            fontsize=14, ha="center", va="bottom",
             transform=fig.transFigure,
         )
 
     is_running = True
-    sim_t = 0.0
+    last_sim_time = 0.0
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
-    have_plan = False #/Because timer run too fast for each step simulation, we only want to route the path per second 
 
     def tick():
-        for i, st_i in amrs.items():
-            for j, st_j in amrs.items():
-                if cur_cell(st_i) == cur_cell(st_j) and i != j:
-                    print(f"AMR{i} and {j} collide at {cur_cell(st_i)}!!!")
-                    return 0
-        
-                
-        nonlocal is_running, sim_t, timer_text, status_texts
-        changed = False
+        nonlocal is_running, last_sim_time
 
-        # 1) ingest new assignments
-        if ingest_new_assignments(amrs):
-            changed = True
+        if not is_running:
+            timer.start()
+            return
 
-        # 2) simulate movement if running
-        if is_running:
-            dt = (UPDATE_INTERVAL_MS / 1000.0) * SIM_SPEED_MULT
-            sim_t += dt
-            simple_step(amrs, dt)
+        # 1) Read state from JSON
+        state = read_amr_state()
+        if state is not None:
+            apply_state(amrs, state)
+            last_sim_time = state.get("sim_time", last_sim_time)
 
-            # update visuals for AMRs
-            for k, st in amrs.items():
-                if st.marker:
-                    st.marker.center = (st.posx, st.posy)
+        # 2) Render
+        for k, vis in amrs.items():
+            # Update marker position (snap — no interpolation)
+            if vis.marker:
+                vis.marker.center = (vis.x, vis.y)
 
-                # build a unified status string
-                phase_str = st.phase if st.phase is not None else "-"
-                state_str = st.state
-                inv = st.inventory
-                inv_str = (
-                    f"A{inv.get('A', 0)} "
-                    f"B{inv.get('B', 0)} "
-                    f"C{inv.get('C', 0)}"
+            # Update label
+            if vis.label:
+                vis.label.set_position((vis.x, vis.y + 0.55))
+
+            # Update A* route line
+            update_route_line(vis)
+
+            # Build status string
+            inv = vis.inventory
+            inv_str = (
+                f"A{inv.get('A', 0)} "
+                f"B{inv.get('B', 0)} "
+                f"C{inv.get('C', 0)}"
+            )
+            phase_str = vis.phase if vis.phase else "-"
+
+            if vis.mode == "processing":
+                status_str = (
+                    f"AMR{k}: processing ({vis.proc_ticks}s left), "
+                    f"{phase_str}, {inv_str}, "
+                    f"(x:{vis.x:.0f} y:{vis.y:.0f})"
                 )
-                if st.blocked: 
-                    blocked_string = "blocked"
-                else:
-                    blocked_string = "unblocked"
-                
-                if st.state == "processing":
-                    status_str = f"AMR{k}: processing ({st.proc_remaining:.1f}s), {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
-                elif st.state == "waiting":
-                    status_str = f"AMR{k}: waiting, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
-                else:
-                    status_str = f"AMR{k}: {state_str}, {blocked_string}, {phase_str}, {inv_str}, (x:{st.posx:.1f} y:{st.posy:.1f})"
+            elif vis.mode in ("moving_supply", "moving_station", "moving_base"):
+                job_str = f"Job{vis.job_idx}" if vis.job_idx is not None else "-"
+                status_str = (
+                    f"AMR{k}: {vis.mode}, {phase_str}, {job_str}, "
+                    f"{inv_str}, (x:{vis.x:.0f} y:{vis.y:.0f})"
+                )
+            else:
+                status_str = (
+                    f"AMR{k}: {vis.mode}, {phase_str}, {inv_str}, "
+                    f"(x:{vis.x:.0f} y:{vis.y:.0f})"
+                )
 
-                # label above the AMR
-                if st.label:
-                    st.label.set_text(f"AMR{k}")
-                    st.label.set_position((st.posx, st.posy + 0.55))
+            if vis.queue_jids:
+                status_str += f" | queue={vis.queue_jids}"
 
-                # status line under the map
-                status_texts[k].set_text(status_str)
+            status_texts[k].set_text(status_str)
 
-            # update timer text
-            # timer_text.set_text(f"Simulation time: {sim_t:6.1f} s")
-            
+        # 3) Update timer display
+        timer_text.set_text(f"Route Map (Viewer)  —  Sim Time: {last_sim_time:.0f}s")
 
-            changed = True
-
-        if changed:
-            fig.canvas.draw_idle()
+        fig.canvas.draw_idle()
         timer.start()
 
     def on_key(e):

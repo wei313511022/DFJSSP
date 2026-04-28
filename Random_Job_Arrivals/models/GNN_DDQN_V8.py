@@ -44,14 +44,14 @@ from GNN.GNN import SchedulerGNN, solve_with_gnn
 CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'DATASET_PATH': '../../test_case/dynamic/test_dataset_demo.jsonl',
-    'SAVE_PATH': '../models_pth/gnn_ddqn_model_v7_demo',
+    'SAVE_PATH': '../models_pth/gnn_ddqn_model_v8_demo',
     
     # Physics
     'GRID_WIDTH': 10,
     'SCALE': 1.0,
     'AMR_SPEED': 1.0,
     'CAPACITY_PER_TYPE': 3,
-    'SIM_TIME': 700.0,  # Max sim time per episode
+    'SIM_TIME': 500.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
     'COMPUTE_TIME_SCALING': 30.0,
     
@@ -61,10 +61,8 @@ CONFIG = {
     'GAMMA': 0.99,
     'LR': 3e-4,
     'FLOW_PENALTY': 0.01,
-    'EPS_START': 1.0,
-    'EPS_END': 0.05,
-    'EPS_DECAY': 200,
     'RESCHED_COOLDOWN': 1.0,
+    'COMPUTE_PENALTY_WEIGHT': 0.5,  # Explicit penalty per second of GA compute
     
     # Model
     'AMR_IN_DIM': 8, 
@@ -74,11 +72,21 @@ CONFIG = {
     'GNN_LAYERS': 2,
     'ACTION_DIM': 2,    # 0: Wait, 1: Release
     
+    # Rainbow DQN
+    'N_ATOMS': 51,
+    'V_MIN': -50.0,
+    'V_MAX': 200.0,
+    'N_STEP': 3,
+    'PER_ALPHA': 0.6,
+    'PER_BETA_START': 0.4,
+    'PER_BETA_END': 1.0,
+    'TAU': 0.005,           # Soft update rate
+    
     # GA Hyperparameters
-    'GA_POP_SIZE': 200,       # Increased from 50
-    'GA_GENERATIONS': 150,    # Increased from 100
-    'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
-    'GA_COLLISION_ITERS': 1,  # Disabled for RL training speed
+    'GA_POP_SIZE': 200,
+    'GA_GENERATIONS': 150,
+    'GA_ROUTING_ITERS': 1000,
+    'GA_COLLISION_ITERS': 1,
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -242,7 +250,7 @@ class TickSimulator:
         return state
 
     def step(self, dt: int):
-        from GA.GA import AMR_KEYS, SUPPLY_LOCATIONS, STATIONS, AMR_STARTS, shortest_path, shortest_path_avoiding, OBSTACLES, _is_within_bounds
+        from GA.GA import AMR_KEYS, SUPPLY_LOCATIONS, STATIONS, AMR_STARTS, shortest_path, OBSTACLES, _is_within_bounds
         import random
         # Extrapolate forward by exactly dt ticks
         for _ in range(dt):
@@ -295,121 +303,96 @@ class TickSimulator:
                             s['goal'] = AMR_STARTS[amr]
                             s['job'] = None
             
-            # 2. Movement — priority: processing > lexicographical
-            from GA.GA import shortest_path_avoiding
+            # 2. Movement Negotiation (Collision-Free Routing Logic directly from GA)
             moves = {}
-            occupied = set()  # cells claimed as DESTINATIONS by higher-priority AMRs
-
-            def get_prio(amr_id):
-                m = self.amr_states[amr_id]['mode']
-                if m in ['processing', 'processing_old']: return 0
-                return 1
+            def prio(amr):
+                m = self.amr_states[amr]['mode']
+                if m in ['processing', 'processing_old']: return 100
+                if m == 'idle': return 10
+                if m == 'moving_station': return 50
+                if m == 'moving_supply': return 40
+                return 30
+                
+            ordered = sorted(AMR_KEYS, key=prio, reverse=True)
+            reserved = set()
             
-            ordered_amrs = sorted(AMR_KEYS, key=lambda a: (get_prio(a), a))
-
-            for amr in ordered_amrs:
-                s = self.amr_states[amr]
+            for amr in ordered:
+                m = self.amr_states[amr]['mode']
                 p = self.positions[amr]
-
-                # Stationary modes: reserve position and skip
-                if s['mode'] in ['processing', 'processing_old']:
+                
+                is_blocking_station = False
+                is_blocking_highway = False
+                if m == 'idle':
+                    for st_pos in STATIONS.values():
+                        if p == st_pos:
+                            is_blocking_station = True
+                            break
+                    if p[0] == 2:
+                        is_blocking_highway = True
+                        
+                if m in ['processing', 'processing_old']:
                     moves[amr] = p
-                    occupied.add(p)
-                    continue
-
-                # Determine goal
+                    reserved.add(p)
+                elif m == 'idle' and not is_blocking_station and not is_blocking_highway and p == self.amr_states[amr].get('goal', p):
+                    moves[amr] = p
+                    reserved.add(p)
+                elif m == 'moving_station' and p == self.amr_states[amr]['goal']:
+                    moves[amr] = p
+                    reserved.add(p)
+                    
+            for amr in ordered:
+                if amr in moves: continue
+                p = self.positions[amr]
+                s = self.amr_states[amr]
                 g = s['goal'] if s.get('goal') is not None else p
                 if s.get('dodge_ticks', 0) > 0:
                     g = s['dodge_goal']
                     s['dodge_ticks'] -= 1
-
-                # If idle at goal with nothing to do, check if blocking
-                if p == g and s['mode'] == 'idle' and p not in occupied:
-                    is_blocking = False
-                    for st_pos in STATIONS.values():
-                        if p == st_pos:
-                            is_blocking = True
-                            break
-                    if not is_blocking and p[0] != 2:  # not on highway
-                        moves[amr] = p
-                        occupied.add(p)
-                        continue
-
-                # Build blocked set:
-                # - All destinations claimed by higher-priority AMRs
-                # - Old positions of higher-priority AMRs that are MOVING AWAY
-                #   (prevents swapping into where they came from)
-                extra_blocked = occupied.copy()
-                extra_blocked.discard(p)
-                for o_amr in ordered_amrs:
-                    if o_amr == amr:
-                        break
-                    o_old = self.positions[o_amr]
-                    o_new = moves.get(o_amr, o_old)
-                    if o_old != o_new:
-                        extra_blocked.add(o_old)
-
-                path = shortest_path_avoiding(p, g, extra_blocked)
-                next_step = path[1] if len(path) > 1 else p
-
-                is_swap = False
-                for o_amr, o_next in moves.items():
-                    if o_next == p and self.positions[o_amr] == next_step:
-                        is_swap = True
-                        break
-
-                must_dodge = False
-                if is_swap or p in occupied:
-                    must_dodge = True
                     
-                if must_dodge:
-                    if next_step != p and next_step not in occupied and next_step not in extra_blocked:
-                        pass # A* gave us a safe escape route
-                    else:
-                        # Emergency dodge: find a safe adjacent tile
-                        best_dodge = None
-                        best_dist = float('inf')
-                        for dx, dy in [(0,1),(1,0),(0,-1),(-1,0)]:
-                            adj = (p[0]+dx, p[1]+dy)
-                            if not _is_within_bounds(adj) or adj in OBSTACLES: continue
-                            if adj in occupied or adj in extra_blocked: continue
-                            
-                            dist = abs(adj[0] - g[0]) + abs(adj[1] - g[1])
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_dodge = adj
-                        
-                        if best_dodge:
-                            next_step = best_dodge
-                        else:
-                            next_step = p # Trapped
-                else:
-                    if next_step in occupied:
-                        next_step = p
+                path = shortest_path(p, g)
+                next_step = path[1] if len(path) > 1 else p
                 
-                moves[amr] = next_step
-                occupied.add(next_step)
-
-                # Wait patiently if blocked, unless returning to base
-                if moves[amr] == p and g != p:
+                if next_step in reserved:
+                    moves[amr] = p
+                    reserved.add(p)
+                else:
+                    swap = False
+                    for o_amr, o_next in moves.items():
+                        if o_next == p and self.positions[o_amr] == next_step:
+                            swap = True
+                            break
+                    if swap:
+                        moves[amr] = p
+                        reserved.add(p)
+                    else:
+                        moves[amr] = next_step
+                        reserved.add(next_step)
+                        
+                if moves[amr] == p and next_step != p:
                     s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
-                    if s['blocked_ticks'] > 5 and s['mode'] == 'moving_base':
-                        possible_dodges = []
-                        for dy in [0, 1, 8, 9]:
-                            for dx in range(0, 20):
-                                dpos = (dx, dy)
-                                if dpos not in OBSTACLES: possible_dodges.append(dpos)
-                        if possible_dodges:
-                            s['goal'] = random.choice(possible_dodges)
-                            s['blocked_ticks'] = 0
+                    if s['blocked_ticks'] > 5 and s['mode'] in ['moving_supply', 'moving_station', 'moving_base', 'idle']:
+                        if s['mode'] == 'moving_base':
+                            possible_dodges = []
+                            for dy in [0, 1, 8, 9]:
+                                for dx in range(0, 20):
+                                    dpos = (dx, dy)
+                                    if dpos not in OBSTACLES: possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['goal'] = random.choice(possible_dodges)
+                                s['blocked_ticks'] = 0
+                        else:
+                            possible_dodges = []
+                            for dy in range(-3, 4):
+                                for dx in range(-3, 4):
+                                    dpos = (p[0]+dx, p[1]+dy)
+                                    if _is_within_bounds(dpos) and dpos not in OBSTACLES:
+                                        possible_dodges.append(dpos)
+                            if possible_dodges:
+                                s['dodge_goal'] = random.choice(possible_dodges)
+                                s['dodge_ticks'] = 15
                 else:
                     s['blocked_ticks'] = 0
-
-            # Collision assertion (debug)
-            final_positions = list(moves.values())
-            if len(final_positions) != len(set(final_positions)):
-                print(f"[COLLISION @ t={self.t}] {moves}")
-
+                    
             # 3. Apply moves
             for amr in AMR_KEYS:
                 self.positions[amr] = moves[amr]
@@ -624,8 +607,8 @@ class GridEnv:
                     # 3. Inject new schedule AFTER calculation delay
                     self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
 
-                    # R2: Small fixed bonus for successful reschedule
-                    # reward += 1.0
+                    # R2: Explicit compute-time penalty (Rainbow V8 reward fix)
+                    reward -= compute_time * CONFIG.get('COMPUTE_PENALTY_WEIGHT', 0.5)
                     
                     # R3: Schedule-quality reward — scales with backlog size
                     # More unstarted jobs → bigger benefit from rescheduling
@@ -785,99 +768,327 @@ class GridEnv:
         ]
         
         return a_data, j_data, q_data
+
 # ==========================================
-# 4. BATCHED GNN MODEL (THE GPU FIX)
+# 4. NOISY LINEAR LAYER (Rainbow Component 6)
+# ==========================================
+class NoisyLinear(nn.Module):
+    """Factorized Gaussian NoisyNet layer (Fortunato et al., 2018)."""
+    def __init__(self, in_features, out_features, sigma_init=0.5):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight_sigma = nn.Parameter(torch.empty(out_features, in_features))
+        self.register_buffer('weight_epsilon', torch.empty(out_features, in_features))
+
+        self.bias_mu = nn.Parameter(torch.empty(out_features))
+        self.bias_sigma = nn.Parameter(torch.empty(out_features))
+        self.register_buffer('bias_epsilon', torch.empty(out_features))
+
+        self.sigma_init = sigma_init
+        self.reset_parameters()
+        self.reset_noise()
+
+    def reset_parameters(self):
+        mu_range = 1.0 / math.sqrt(self.in_features)
+        self.weight_mu.data.uniform_(-mu_range, mu_range)
+        self.weight_sigma.data.fill_(self.sigma_init / math.sqrt(self.in_features))
+        self.bias_mu.data.uniform_(-mu_range, mu_range)
+        self.bias_sigma.data.fill_(self.sigma_init / math.sqrt(self.out_features))
+
+    @staticmethod
+    def _scale_noise(size):
+        x = torch.randn(size)
+        return x.sign().mul_(x.abs().sqrt_())
+
+    def reset_noise(self):
+        epsilon_in = self._scale_noise(self.in_features)
+        epsilon_out = self._scale_noise(self.out_features)
+        self.weight_epsilon.copy_(epsilon_out.outer(epsilon_in))
+        self.bias_epsilon.copy_(epsilon_out)
+
+    def forward(self, x):
+        if self.training:
+            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
+            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
+        else:
+            weight = self.weight_mu
+            bias = self.bias_mu
+        return F.linear(x, weight, bias)
+
+
+# ==========================================
+# 5. BATCHED GNN MODEL (Same backbone as V7)
 # ==========================================
 class BatchedHeteroGNN(nn.Module):
     def __init__(self, h_dim):
         super().__init__()
-        # AMR sees: [Self, Job_Mean, Job_Max] -> 3 * h_dim
         self.upd_amr = nn.Sequential(nn.Linear(h_dim * 3, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim))
-        # Job sees: [Self, AMR_Mean] -> 2 * h_dim
         self.upd_job = nn.Sequential(nn.Linear(h_dim * 2, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim))
 
     def forward(self, h_amr, h_job, job_mask):
-        # h_amr: [Batch, 3, H]
-        # h_job: [Batch, MaxJobs, H]
-        # job_mask: [Batch, MaxJobs, 1] (1 for real job, 0 for padding)
-
-        # 1. Pool Jobs -> Message to AMR
-        # Mask out padding before mean
         masked_job = h_job * job_mask
-        # Sum valid jobs and divide by count (avoid div by zero)
-        job_sum = masked_job.sum(dim=1, keepdim=True) 
+        job_sum = masked_job.sum(dim=1, keepdim=True)
         job_count = job_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        job_mean = job_sum / job_count # [Batch, 1, H]
-        
-        # Max Pooling (Critical for detecting outliers like high wait times)
-        # Since h_job is ReLU output (>=0), padding with 0 is safe for max
-        job_max = masked_job.max(dim=1, keepdim=True)[0] # [Batch, 1, H]
+        job_mean = job_sum / job_count
+        job_max = masked_job.max(dim=1, keepdim=True)[0]
 
-        # Expand to all AMRs
         msg_mean_to_amr = job_mean.expand(-1, h_amr.size(1), -1)
         msg_max_to_amr = job_max.expand(-1, h_amr.size(1), -1)
-        
-        # 2. Pool AMRs -> Message to Job
-        amr_mean = h_amr.mean(dim=1, keepdim=True) # [Batch, 1, H]
+
+        amr_mean = h_amr.mean(dim=1, keepdim=True)
         msg_to_job = amr_mean.expand(-1, h_job.size(1), -1)
 
-        # 3. Update
-        # Concatenate features instead of adding them
         in_amr = torch.cat([h_amr, msg_mean_to_amr, msg_max_to_amr], dim=-1)
         out_amr = self.upd_amr(in_amr)
-        
+
         in_job = torch.cat([h_job, msg_to_job], dim=-1)
         out_job = self.upd_job(in_job)
-        
-        return out_amr, out_job * job_mask # Re-apply mask
 
+        return out_amr, out_job * job_mask
+
+
+# ==========================================
+# 6. RAINBOW SCHEDULER AGENT (Distributional Dueling + NoisyNets)
+# ==========================================
 class SchedulerAgent(nn.Module):
     def __init__(self):
         super().__init__()
         h = CONFIG['HIDDEN_DIM']
+        n_atoms = CONFIG['N_ATOMS']
+        n_actions = CONFIG['ACTION_DIM']
+        feat_dim = h + CONFIG['QUEUE_DIM']
+
         self.enc_amr = nn.Linear(CONFIG['AMR_IN_DIM'], h)
         self.enc_job = nn.Linear(CONFIG['JOB_IN_DIM'], h)
         self.gnn = BatchedHeteroGNN(h)
-        self.head_val = nn.Sequential(nn.Linear(h+CONFIG['QUEUE_DIM'], h), nn.ReLU(), nn.Linear(h, 1))
-        self.head_adv = nn.Sequential(nn.Linear(h+CONFIG['QUEUE_DIM'], h), nn.ReLU(), nn.Linear(h, CONFIG['ACTION_DIM']))
+
+        # Dueling Value stream (outputs distribution over atoms)
+        self.val_hidden = NoisyLinear(feat_dim, h)
+        self.val_out = NoisyLinear(h, n_atoms)
+
+        # Dueling Advantage stream (outputs distribution per action)
+        self.adv_hidden = NoisyLinear(feat_dim, h)
+        self.adv_out = NoisyLinear(h, n_actions * n_atoms)
+
+        self.n_atoms = n_atoms
+        self.n_actions = n_actions
+
+        # Atom support
+        self.register_buffer('support', torch.linspace(CONFIG['V_MIN'], CONFIG['V_MAX'], n_atoms))
 
     def forward(self, x_amr, x_job, x_q, job_mask):
-        # x_amr: [B, 3, 8], x_job: [B, N, 10], mask: [B, N, 1]
         h_amr = F.relu(self.enc_amr(x_amr))
         h_job = F.relu(self.enc_job(x_job))
-        
         h_amr, _ = self.gnn(h_amr, h_job, job_mask)
-        
-        # Global Pooling
-        shop_emb = h_amr.mean(dim=1) # [B, H]
-        state = torch.cat([shop_emb, x_q], dim=-1)
-        
-        val = self.head_val(state)
-        adv = self.head_adv(state)
-        return val + (adv - adv.mean(dim=1, keepdim=True))
+
+        shop_emb = h_amr.mean(dim=1)  # [B, H]
+        state = torch.cat([shop_emb, x_q], dim=-1)  # [B, feat_dim]
+
+        # Value distribution
+        val = F.relu(self.val_hidden(state))
+        val = self.val_out(val).view(-1, 1, self.n_atoms)  # [B, 1, N_ATOMS]
+
+        # Advantage distribution
+        adv = F.relu(self.adv_hidden(state))
+        adv = self.adv_out(adv).view(-1, self.n_actions, self.n_atoms)  # [B, A, N_ATOMS]
+
+        # Dueling aggregation per-atom, then softmax to get probabilities
+        q_atoms = val + adv - adv.mean(dim=1, keepdim=True)  # [B, A, N_ATOMS]
+        dist = F.softmax(q_atoms, dim=-1)  # [B, A, N_ATOMS]
+        dist = dist.clamp(min=1e-3)  # Avoid log(0) in KL divergence
+
+        return dist
+
+    def q_values(self, x_amr, x_job, x_q, job_mask):
+        """Compute expected Q-values from the distribution (for action selection)."""
+        dist = self.forward(x_amr, x_job, x_q, job_mask)  # [B, A, N_ATOMS]
+        q = (dist * self.support.unsqueeze(0).unsqueeze(0)).sum(dim=-1)  # [B, A]
+        return q
+
+    def reset_noise(self):
+        for m in self.modules():
+            if isinstance(m, NoisyLinear):
+                m.reset_noise()
+
 
 # ==========================================
-# 5. BATCH PROCESSING UTILS
+# 7. PRIORITIZED EXPERIENCE REPLAY (Rainbow Component 3)
+# ==========================================
+class SumTree:
+    """Binary sum-tree for O(log n) proportional sampling."""
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity - 1)
+        self.data = [None] * capacity
+        self.write_idx = 0
+        self.n_entries = 0
+
+    def _propagate(self, idx, change):
+        parent = (idx - 1) // 2
+        self.tree[parent] += change
+        if parent != 0:
+            self._propagate(parent, change)
+
+    def _retrieve(self, idx, s):
+        left = 2 * idx + 1
+        right = left + 1
+        if left >= len(self.tree):
+            return idx
+        if s <= self.tree[left]:
+            return self._retrieve(left, s)
+        else:
+            return self._retrieve(right, s - self.tree[left])
+
+    def total(self):
+        return self.tree[0]
+
+    def add(self, priority, data):
+        idx = self.write_idx + self.capacity - 1
+        self.data[self.write_idx] = data
+        self.update(idx, priority)
+        self.write_idx = (self.write_idx + 1) % self.capacity
+        self.n_entries = min(self.n_entries + 1, self.capacity)
+
+    def update(self, idx, priority):
+        change = priority - self.tree[idx]
+        self.tree[idx] = priority
+        self._propagate(idx, change)
+
+    def get(self, s):
+        idx = self._retrieve(0, s)
+        data_idx = idx - self.capacity + 1
+        return idx, self.tree[idx], self.data[data_idx]
+
+
+class PrioritizedReplayBuffer:
+    """Proportional PER with SumTree."""
+    def __init__(self, capacity, alpha=0.6):
+        self.tree = SumTree(capacity)
+        self.alpha = alpha
+        self.max_priority = 1.0
+        self.capacity = capacity
+
+    def push(self, transition):
+        priority = self.max_priority ** self.alpha
+        self.tree.add(priority, transition)
+
+    def sample(self, batch_size, beta=0.4):
+        batch = []
+        indices = []
+        priorities = []
+        segment = self.tree.total() / batch_size
+
+        for i in range(batch_size):
+            a = segment * i
+            b = segment * (i + 1)
+            s = random.uniform(a, b)
+            idx, p, data = self.tree.get(s)
+            if data is None:
+                # Fallback: resample from valid range
+                s = random.uniform(0, self.tree.total())
+                idx, p, data = self.tree.get(s)
+            batch.append(data)
+            indices.append(idx)
+            priorities.append(p)
+
+        # Importance-sampling weights
+        total = self.tree.total()
+        n = self.tree.n_entries
+        min_prob = min(priorities) / total
+        max_weight = (n * min_prob) ** (-beta) if min_prob > 0 else 1.0
+
+        weights = []
+        for p in priorities:
+            prob = p / total
+            w = (n * prob) ** (-beta) if prob > 0 else 1.0
+            weights.append(w / max_weight)
+
+        return batch, indices, torch.tensor(weights, dtype=torch.float32, device=CONFIG['DEVICE'])
+
+    def update_priorities(self, indices, td_errors):
+        for idx, td in zip(indices, td_errors):
+            priority = (abs(td) + 1e-6) ** self.alpha
+            self.max_priority = max(self.max_priority, priority)
+            self.tree.update(idx, priority)
+
+    def __len__(self):
+        return self.tree.n_entries
+
+
+# ==========================================
+# 8. N-STEP RETURN BUFFER (Rainbow Component 4)
+# ==========================================
+class NStepBuffer:
+    """Accumulates n transitions and computes n-step discounted return with SMDP."""
+    def __init__(self, n_step, gamma):
+        self.n_step = n_step
+        self.gamma = gamma
+        self.buffer = deque(maxlen=n_step)
+
+    def append(self, transition):
+        """transition = (state, action, reward, next_state, done, cur_mask, next_mask, dt)"""
+        self.buffer.append(transition)
+
+    def is_ready(self):
+        return len(self.buffer) == self.n_step
+
+    def get(self):
+        """Compute n-step return and return (s0, a0, R_n, s_n, done_n, mask0, mask_n, total_dt)."""
+        state, action, _, _, _, cur_mask, _, _ = self.buffer[0]
+
+        # Compute n-step discounted return with SMDP time-discounting
+        R = 0.0
+        cumulative_dt = 0.0
+        for i, (_, _, r, _, d, _, _, dt) in enumerate(self.buffer):
+            R += (self.gamma ** cumulative_dt) * r
+            cumulative_dt += dt
+            if d:
+                # Episode ended within n steps
+                _, _, _, next_s, done, _, next_mask, _ = self.buffer[i]
+                return state, action, R, next_s, done, cur_mask, next_mask, cumulative_dt
+
+        # No terminal state within n steps
+        _, _, _, next_s, done, _, next_mask, _ = self.buffer[-1]
+        return state, action, R, next_s, done, cur_mask, next_mask, cumulative_dt
+
+    def flush(self):
+        """Flush remaining transitions at episode end (returns list of partial n-step transitions)."""
+        results = []
+        while len(self.buffer) > 0:
+            state, action, _, _, _, cur_mask, _, _ = self.buffer[0]
+            R = 0.0
+            cumulative_dt = 0.0
+            for i, (_, _, r, _, d, _, _, dt) in enumerate(self.buffer):
+                R += (self.gamma ** cumulative_dt) * r
+                cumulative_dt += dt
+            _, _, _, next_s, done, _, next_mask, _ = self.buffer[-1]
+            results.append((state, action, R, next_s, True, cur_mask, next_mask, cumulative_dt))
+            self.buffer.popleft()
+        return results
+
+    def reset(self):
+        self.buffer.clear()
+
+
+# ==========================================
+# 9. BATCH PROCESSING UTILS
 # ==========================================
 def collate_batch(batch_list):
     """
     Takes a list of (amr, job, queue) tuples and stacks them into Tensors.
     Handles variable number of jobs via Padding.
     """
-    # Unzip
-    states, actions, rewards, next_states, dones, cur_amasks, next_amasks, dts = zip(*batch_list)    
+    states, actions, rewards, next_states, dones, cur_amasks, next_amasks, dts = zip(*batch_list)
     def pad_and_stack(state_list):
         amrs, jobs, queues = zip(*state_list)
-        
-        # Stack AMRs (Fixed size 3)
         b_amr = torch.tensor(amrs, dtype=torch.float32, device=CONFIG['DEVICE'])
         b_q = torch.tensor(queues, dtype=torch.float32, device=CONFIG['DEVICE'])
-        
-        # Pad Jobs (Variable size)
         max_j = max(len(j) for j in jobs)
         b_job = torch.zeros((len(jobs), max_j, CONFIG['JOB_IN_DIM']), dtype=torch.float32, device=CONFIG['DEVICE'])
         b_mask = torch.zeros((len(jobs), max_j, 1), dtype=torch.float32, device=CONFIG['DEVICE'])
-        
         for i, j_list in enumerate(jobs):
             L = len(j_list)
             if L > 0:
@@ -887,164 +1098,234 @@ def collate_batch(batch_list):
                     b_mask[i, :L, :] = 0.0
                 else:
                     b_mask[i, :L, :] = 1.0
-                
         return b_amr, b_job, b_q, b_mask
 
     s_amr, s_job, s_q, s_mask = pad_and_stack(states)
     ns_amr, ns_job, ns_q, ns_mask = pad_and_stack(next_states)
-    
+
     b_a = torch.tensor(actions, device=CONFIG['DEVICE']).unsqueeze(1)
     b_r = torch.tensor(rewards, dtype=torch.float32, device=CONFIG['DEVICE']).unsqueeze(1)
     b_d = torch.tensor(dones, dtype=torch.float32, device=CONFIG['DEVICE']).unsqueeze(1)
-    
-    b_cur_amask  = torch.tensor(cur_amasks, dtype=torch.float32, device=CONFIG['DEVICE'])   # [B,2]
-    b_next_amask = torch.tensor(next_amasks, dtype=torch.float32, device=CONFIG['DEVICE'])  # [B,2]
+    b_cur_amask  = torch.tensor(cur_amasks, dtype=torch.float32, device=CONFIG['DEVICE'])
+    b_next_amask = torch.tensor(next_amasks, dtype=torch.float32, device=CONFIG['DEVICE'])
     b_dt = torch.tensor(dts, dtype=torch.float32, device=CONFIG['DEVICE']).unsqueeze(1)
 
     return (s_amr, s_job, s_q, s_mask), b_a, b_r, (ns_amr, ns_job, ns_q, ns_mask), b_d, b_cur_amask, b_next_amask, b_dt
 
-# ==========================================
-# 6. TRAINING
-# ==========================================
-class ReplayBuffer:
-    def __init__(self, cap): self.buf = deque(maxlen=cap)
-    def push(self, x): self.buf.append(x)
-    def sample(self, n): return random.sample(self.buf, n)
-    def __len__(self): return len(self.buf)
 
-def optimize(agent, target, opt, memory):
+# ==========================================
+# 10. DISTRIBUTIONAL TRAINING (Rainbow Components 1-5 combined)
+# ==========================================
+def project_distribution(next_dist, rewards, dones, dts, support, gamma, n_atoms, v_min, v_max):
+    """
+    Categorical projection of the Bellman update onto the fixed atom support.
+    next_dist: [B, N_ATOMS] - target distribution for chosen next action
+    rewards:   [B, 1]
+    dones:     [B, 1]
+    dts:       [B, 1] - SMDP elapsed time
+    """
+    delta_z = (v_max - v_min) / (n_atoms - 1)
+    batch_size = rewards.size(0)
+
+    rewards = rewards.squeeze(1)     # [B]
+    dones = dones.squeeze(1)         # [B]
+    dts = dts.squeeze(1)             # [B]
+
+    # SMDP time-discounting
+    gamma_dt = gamma ** dts  # [B]
+
+    # Tz = r + gamma^dt * z (clipped to [V_MIN, V_MAX])
+    Tz = rewards.unsqueeze(1) + gamma_dt.unsqueeze(1) * (1 - dones.unsqueeze(1)) * support.unsqueeze(0)  # [B, N_ATOMS]
+    Tz = Tz.clamp(min=v_min, max=v_max)
+
+    # Compute projection indices
+    b = (Tz - v_min) / delta_z  # [B, N_ATOMS]
+    l = b.floor().long()
+    u = b.ceil().long()
+
+    # Clamp indices
+    l = l.clamp(0, n_atoms - 1)
+    u = u.clamp(0, n_atoms - 1)
+
+    # Distribute probability mass
+    m = torch.zeros(batch_size, n_atoms, device=rewards.device)
+    offset = torch.arange(batch_size, device=rewards.device).unsqueeze(1) * n_atoms
+
+    # Lower bound contribution
+    m.view(-1).index_add_(0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1))
+    # Upper bound contribution
+    m.view(-1).index_add_(0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1))
+
+    return m
+
+
+def optimize(agent, target, opt, memory, beta):
     if len(memory) < CONFIG['BATCH_SIZE']:
         return 0.0
 
-    batch_raw = memory.sample(CONFIG['BATCH_SIZE'])
+    n_atoms = CONFIG['N_ATOMS']
+    v_min = CONFIG['V_MIN']
+    v_max = CONFIG['V_MAX']
+    gamma = CONFIG['GAMMA']
+
+    batch_raw, tree_indices, is_weights = memory.sample(CONFIG['BATCH_SIZE'], beta)
     curr_state, act, rew, next_state, done, cur_amask, next_amask, dt_batch = collate_batch(batch_raw)
-    # Current Q
-    q_all = agent(*curr_state)  # [B,2]
-    # invalid -> very negative
-    q_all = q_all + (cur_amask - 1.0) * 1e7
-    q_curr = q_all.gather(1, act)
+
+    # Current distribution
+    curr_dist = agent(*curr_state)  # [B, A, N_ATOMS]
+    act_expanded = act.unsqueeze(-1).expand(-1, -1, n_atoms)  # [B, 1, N_ATOMS]
+    curr_dist_a = curr_dist.gather(1, act_expanded).squeeze(1)  # [B, N_ATOMS]
+    log_curr = torch.log(curr_dist_a + 1e-8)
 
     with torch.no_grad():
         ns_amr, ns_job, ns_q, ns_mask = next_state
 
-        # online net chooses next action (masked)
-        q_next_online = agent(ns_amr, ns_job, ns_q, ns_mask)        # [B,2]
-        q_next_online = q_next_online + (next_amask - 1.0) * 1e7
-        next_acts = q_next_online.argmax(1, keepdim=True)           # [B,1]
+        # Double DQN: online net selects next action (masked)
+        q_next_online = agent.q_values(ns_amr, ns_job, ns_q, ns_mask)  # [B, A]
+        q_next_online = q_next_online + (next_amask - 1.0) * 1e9
+        next_actions = q_next_online.argmax(1)  # [B]
 
-        # target net evaluates it (masked same way也行，保險)
-        q_next_target = target(ns_amr, ns_job, ns_q, ns_mask)        # [B,2]
-        q_next_target = q_next_target + (next_amask - 1.0) * 1e7
-        next_vals = q_next_target.gather(1, next_acts)
+        # Target net evaluates distribution of selected action
+        next_dist_all = target(ns_amr, ns_job, ns_q, ns_mask)  # [B, A, N_ATOMS]
+        next_actions_expanded = next_actions.unsqueeze(1).unsqueeze(2).expand(-1, -1, n_atoms)
+        next_dist = next_dist_all.gather(1, next_actions_expanded).squeeze(1)  # [B, N_ATOMS]
 
-        # SMDP Time-Discounting: scale GAMMA by the actual elapsed time dt
-        gamma_dt = CONFIG['GAMMA'] ** dt_batch
-        q_target = rew + gamma_dt * next_vals * (1 - done)
-    loss = F.smooth_l1_loss(q_curr, q_target)
+        # Project target distribution
+        target_dist = project_distribution(
+            next_dist, rew, done, dt_batch,
+            agent.support, gamma, n_atoms, v_min, v_max
+        )
+
+    # Cross-entropy loss with importance-sampling weights
+    element_wise_loss = -(target_dist * log_curr).sum(dim=-1)  # [B]
+    loss = (is_weights * element_wise_loss).mean()
 
     opt.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+    torch.nn.utils.clip_grad_norm_(agent.parameters(), 10.0)
     opt.step()
+
+    # Update priorities in PER (use KL-divergence as TD-error proxy)
+    td_errors = element_wise_loss.detach().cpu().numpy()
+    memory.update_priorities(tree_indices, td_errors)
+
+    # Reset noise after optimization step
+    agent.reset_noise()
+    target.reset_noise()
 
     return loss.item()
 
 
+# ==========================================
+# 11. TRAINING LOOP (Rainbow)
+# ==========================================
 def main():
     print(f"--- GPU STATUS: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'} ---")
-    
+    print(f"--- Rainbow DQN V8 ---")
+
+    os.makedirs(CONFIG['SAVE_PATH'], exist_ok=True)
+
     env = GridEnv()
     agent = SchedulerAgent().to(CONFIG['DEVICE'])
     agent.train()
     target = SchedulerAgent().to(CONFIG['DEVICE'])
     target.load_state_dict(agent.state_dict())
     target.eval()
-    
+
     opt = optim.Adam(agent.parameters(), lr=CONFIG['LR'])
-    memory = ReplayBuffer(20000)
-    
+    memory = PrioritizedReplayBuffer(20000, alpha=CONFIG['PER_ALPHA'])
+    n_step_buf = NStepBuffer(CONFIG['N_STEP'], CONFIG['GAMMA'])
+
+    total_steps = 0
+    WARMUP_STEPS = 3000
+    UPDATE_EVERY = 4
+
     for ep in range(CONFIG['NUM_EPISODES']):
-        state = env.reset() # Returns CPU lists
+        state = env.reset()
         ep_rew, ep_loss, opt_steps = 0, 0, 0
-        eps = CONFIG['EPS_END'] + (CONFIG['EPS_START'] - CONFIG['EPS_END']) * math.exp(-1.*ep/CONFIG['EPS_DECAY'])
         step_i = 0
         t0 = time.time()
+        n_step_buf.reset()
+
+        # Anneal PER beta linearly
+        beta = CONFIG['PER_BETA_START'] + (CONFIG['PER_BETA_END'] - CONFIG['PER_BETA_START']) * (ep / max(CONFIG['NUM_EPISODES'] - 1, 1))
+
         while True:
             step_i += 1
+            total_steps += 1
 
-            
             mask = env.get_action_mask()
-            # Select Action (Single Inference)
-            if random.random() < eps:
-                # 只從 valid actions sample
-                valid_actions = [i for i, m in enumerate(mask) if m > 0.5]
-                action = random.choice(valid_actions)
-            else:
-                with torch.no_grad():
-                    s_amr = torch.tensor([state[0]], dtype=torch.float32, device=CONFIG['DEVICE'])
-                    s_job = torch.tensor([state[1]], dtype=torch.float32, device=CONFIG['DEVICE'])
-                    s_q = torch.tensor([state[2]], dtype=torch.float32, device=CONFIG['DEVICE'])
-                    
-                    # LOGIC FIX: Create mask based on actual data
-                    # If the first feature of the first job is 0.0, it's a Ghost Job.
-                    # We create a mask of 1s, but if it's a ghost, we make it 0.
-                    s_mask = torch.ones((1, s_job.size(1), 1), device=CONFIG['DEVICE'])
-                    
-                    # Check if 'Existence Bit' (index 0) is 0
-                    if state[1][0][0] == 0.0: 
-                        s_mask = torch.zeros((1, s_job.size(1), 1), device=CONFIG['DEVICE'])
 
-                    t_start = time.perf_counter()
-                    q = agent(s_amr, s_job, s_q, s_mask)  # [1,2]
+            # --- Action selection via NoisyNets (no epsilon-greedy!) ---
+            with torch.no_grad():
+                s_amr = torch.tensor([state[0]], dtype=torch.float32, device=CONFIG['DEVICE'])
+                s_job = torch.tensor([state[1]], dtype=torch.float32, device=CONFIG['DEVICE'])
+                s_q = torch.tensor([state[2]], dtype=torch.float32, device=CONFIG['DEVICE'])
 
-                    # action mask: invalid -> -inf
-                    if mask[1] < 0.5:
-                        q[0, 1] = -1e7
+                s_mask = torch.ones((1, s_job.size(1), 1), device=CONFIG['DEVICE'])
+                if state[1][0][0] == 0.0:
+                    s_mask = torch.zeros((1, s_job.size(1), 1), device=CONFIG['DEVICE'])
 
-                    action = q.argmax(1).item()
-                    action_str = "RESCHEDULE" if action == 1 else "WAIT"
-                    print(f"Ep {ep} | Active Jobs: {len(env.active_jobs)} | Action: {action_str} | GNN+DDQN Time: {(time.perf_counter() - t_start) * 1000:.4f} ms")
-            
-            
+                q = agent.q_values(s_amr, s_job, s_q, s_mask)  # [1, 2]
 
-            curr_action_mask = env.get_action_mask()  # before step
+                # Action mask: invalid -> -inf
+                if mask[1] < 0.5:
+                    q[0, 1] = -1e9
 
+                action = q.argmax(1).item()
+                action_str = "RESCHEDULE" if action == 1 else "WAIT"
+                if action == 1:
+                    print(f"Ep {ep} | Active Jobs: {len(env.active_jobs)} | Action: {action_str}")
+
+            curr_action_mask = env.get_action_mask()
             next_state, reward, done, dt = env.step(action)
-            
-            if action == 1:
-                print(f"Ep {ep} | Active Jobs: {len(env.active_jobs)} | Pairing Computation Time: {env.last_ga_compute_time:.2f} seconds")
 
-            next_action_mask = env.get_action_mask()  # after step (sim_time/last_resched 已更新)
+            if action == 1 and env.last_ga_compute_time > 0:
+                print(f"Ep {ep} | Pairing Computation Time: {env.last_ga_compute_time:.2f}s")
 
-            # R4: Skip forced-Wait transitions (mask=[1,0] and action=0)
-            # These provide no learning signal about when to reschedule
+            next_action_mask = env.get_action_mask()
+
+            # Skip forced-Wait transitions (no learning signal)
             is_forced_wait = (action == 0 and curr_action_mask[1] < 0.5)
             if not is_forced_wait:
-                memory.push((state, action, reward, next_state, done, curr_action_mask, next_action_mask, dt))
+                # Feed into n-step buffer
+                n_step_buf.append((state, action, reward, next_state, done, curr_action_mask, next_action_mask, dt))
+
+                if n_step_buf.is_ready():
+                    n_step_transition = n_step_buf.get()
+                    memory.push(n_step_transition)
+
             state = next_state
-
             ep_rew += reward
-            
-            WARMUP_STEPS = 3000
-            UPDATE_EVERY = 4
 
-            if len(memory) > WARMUP_STEPS and (step_i % UPDATE_EVERY == 0):
-                loss_val = optimize(agent, target, opt, memory)
+            # Optimize
+            if len(memory) > WARMUP_STEPS and (total_steps % UPDATE_EVERY == 0):
+                loss_val = optimize(agent, target, opt, memory, beta)
                 ep_loss += loss_val
                 opt_steps += 1
-            if done: break
-            
+
+                # Soft update target network
+                tau = CONFIG['TAU']
+                for tp, sp in zip(target.parameters(), agent.parameters()):
+                    tp.data.copy_(tau * sp.data + (1.0 - tau) * tp.data)
+
+            if done:
+                # Flush remaining n-step transitions
+                for t in n_step_buf.flush():
+                    memory.push(t)
+                break
+
         if ep % 10 == 0:
-            target.load_state_dict(agent.state_dict())
             avg_loss = ep_loss / opt_steps if opt_steps > 0 else 0.0
-            print(f"Ep {ep} | Reward: {ep_rew:.1f} | Avg Loss: {avg_loss:.4f} | Eps: {eps:.2f}")
+            elapsed = time.time() - t0
+            print(f"Ep {ep} | Reward: {ep_rew:.1f} | Avg Loss: {avg_loss:.4f} | Beta: {beta:.3f} | Steps: {step_i} | Time: {elapsed:.1f}s")
 
         if ep % 100 == 0:
-            ckpt_path = f"{CONFIG['SAVE_PATH']}/gnn_ddqn_model_v7_ep{ep}.pth"
+            ckpt_path = f"{CONFIG['SAVE_PATH']}/gnn_ddqn_model_v8_ep{ep}.pth"
             torch.save(agent.state_dict(), ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 
-    torch.save(agent.state_dict(), f"{CONFIG['SAVE_PATH']}/gnn_ddqn_model_v7.pth")
+    torch.save(agent.state_dict(), f"{CONFIG['SAVE_PATH']}/gnn_ddqn_model_v8.pth")
     print("Done.")
 
 if __name__ == "__main__":
