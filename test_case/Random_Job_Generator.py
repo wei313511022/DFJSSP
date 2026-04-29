@@ -7,7 +7,7 @@ import argparse
 import math
 
 # --------------------------- Config ---------------------------
-OUTPUT_FILE = "dispatch_inbox.jsonl"
+OUTPUT_FILE = "dispatch_inbox_25.jsonl"
 STATION_COUNT = 3
 
 # Job definitions
@@ -17,12 +17,11 @@ JOB_TYPES = {
     "C": {"time": 20},
 }
 JOB_TYPE_KEYS = list(JOB_TYPES.keys())
-
 # --------------------------- Logic ---------------------------
 
 def generate_data(num_batches, batch_size):
     """
-    Generates N batches of jobs instantly and writes to JSONL.
+    Generates N batches of jobs instantly and writes to JSONL.ssss
     Each batch contains 'batch_size' jobs.
     """
     
