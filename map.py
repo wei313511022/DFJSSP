@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Set
 
-TIME_LIMIT = None
+TIME_LIMIT = 300
 
 # Grid
 GRID_SIZE: int = 10
