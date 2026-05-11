@@ -51,20 +51,20 @@ CONFIG = {
     'SCALE': 1.0,
     'AMR_SPEED': 1.0,
     'CAPACITY_PER_TYPE': 3,
-    'SIM_TIME': 700.0,  # Max sim time per episode
+    'SIM_TIME': 1000.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
-    'COMPUTE_TIME_SCALING': 30.0,
+    'COMPUTE_TIME_SCALING': 1.0,  # Reduced from 30: less sim-time cost per reschedule
     
     # Training
-    'NUM_EPISODES': 1000,
+    'NUM_EPISODES': 1000,   # More episodes for single-case convergence
     'BATCH_SIZE': 64,
-    'GAMMA': 0.99,
+    'GAMMA': 0.97,          # Reduced from 0.99: lessens SMDP γ^dt bias against reschedule
     'LR': 3e-4,
-    'FLOW_PENALTY': 0.01,
+    'FLOW_PENALTY': 0.05,   # Increased from 0.01: stronger urgency to clear jobs
     'EPS_START': 1.0,
     'EPS_END': 0.05,
-    'EPS_DECAY': 200,
-    'RESCHED_COOLDOWN': 1.0,
+    'EPS_DECAY': 100,       # Faster exploitation since single test case
+    'RESCHED_COOLDOWN': 0.0,  # Let reward signals control pacing, not hard constraints
     
     # Model
     'AMR_IN_DIM': 8, 
@@ -78,7 +78,7 @@ CONFIG = {
     'GA_POP_SIZE': 200,       # Increased from 50
     'GA_GENERATIONS': 150,    # Increased from 100
     'GA_ROUTING_ITERS': 1000,   # WARNING: Lowered from 1000. 1000 makes RL training prohibitively slow!
-    'GA_COLLISION_ITERS': 1,  # Disabled for RL training speed
+    'GA_COLLISION_ITERS': 400,  # Disabled for RL training speed
     'GA_ROUTING_MAX_DEPTH': 100
 }
 
@@ -386,6 +386,31 @@ class TickSimulator:
                 else:
                     if next_step in occupied:
                         next_step = p
+                    elif next_step != p:
+                        occupant = None
+                        for o in AMR_KEYS:
+                            if o == amr: continue
+                            if o not in moves and self.positions[o] == next_step:
+                                occupant = o
+                                break
+                        if occupant:
+                            escape_found = False
+                            for dx, dy in [(0,1),(1,0),(0,-1),(-1,0)]:
+                                adj = (next_step[0]+dx, next_step[1]+dy)
+                                if not _is_within_bounds(adj) or adj in OBSTACLES: continue
+                                if adj in occupied or adj == p: continue
+                                is_empty = True
+                                for a in AMR_KEYS:
+                                    if a == occupant: continue
+                                    pos_a = moves.get(a, self.positions[a])
+                                    if pos_a == adj:
+                                        is_empty = False
+                                        break
+                                if is_empty:
+                                    escape_found = True
+                                    break
+                            if not escape_found:
+                                next_step = p
                 
                 moves[amr] = next_step
                 occupied.add(next_step)
@@ -393,14 +418,15 @@ class TickSimulator:
                 # Wait patiently if blocked, unless returning to base
                 if moves[amr] == p and g != p:
                     s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
-                    if s['blocked_ticks'] > 5 and s['mode'] == 'moving_base':
+                    if s['blocked_ticks'] > 5 and s['mode'] in ['moving_base', 'moving_station', 'moving_supply']:
                         possible_dodges = []
                         for dy in [0, 1, 8, 9]:
-                            for dx in range(0, 20):
+                            for dx in range(0, 10):
                                 dpos = (dx, dy)
                                 if dpos not in OBSTACLES: possible_dodges.append(dpos)
                         if possible_dodges:
-                            s['goal'] = random.choice(possible_dodges)
+                            s['dodge_goal'] = random.choice(possible_dodges)
+                            s['dodge_ticks'] = 10
                             s['blocked_ticks'] = 0
                 else:
                     s['blocked_ticks'] = 0
@@ -556,13 +582,27 @@ class GridEnv:
         # -------------------------------
         # 1) Reward shaping params
         # -------------------------------
-        DONE_REWARD = 10.0
-        FLOW_PENALTY = CONFIG.get('FLOW_PENALTY', 0.1)
-        EMPTY_RESCHED_PENALTY = 0.2
+        DONE_REWARD = 1.0               # Reduced from 10: completions are mostly action-independent
+        FLOW_PENALTY = CONFIG.get('FLOW_PENALTY', 0.05)
+        UNSCHED_PENALTY = 0.1           # Strong pressure to address unscheduled jobs
+        COMPUTE_PENALTY = 0.3           # Per-tick cost of rescheduling computation
+        EMPTY_RESCHED_PENALTY = 0.5     # Increased: punish wasted reschedule attempts
+        BACKLOG_BONUS_SCALE = 0.5       # Bonus per unscheduled job addressed by rescheduling
 
         reward = 0.0
         before_done = len(self.completed_jobs)
         compute_time = 0.0
+
+        # Count unscheduled jobs BEFORE action for reward comparison
+        from GA.GA import AMR_KEYS as _AMR_KEYS
+        _sched_jids_before = set()
+        for _amr in _AMR_KEYS:
+            _s = self.sim.amr_states[_amr]
+            if _s['job'] is not None:
+                _sched_jids_before.add(_s['job'].idx)
+            for _qj in self.sim.amr_queues[_amr]:
+                _sched_jids_before.add(_qj.idx)
+        n_unscheduled_before = sum(1 for j in self.active_jobs if j.status == 1 and j.jid not in _sched_jids_before)
 
         # -------------------------------
         # 2) Apply action (reschedule)
@@ -581,7 +621,7 @@ class GridEnv:
                     from GA.GA import STATIONS, AMR_KEYS
                     pos_to_station = {v: k for k, v in STATIONS.items()}
                     
-                    # Snapshot makespan BEFORE rescheduling (for R3: quality reward)
+                    # Snapshot makespan BEFORE rescheduling
                     mk_before = self.calculate_current_makespan()
                     
                     ga_jobs = []
@@ -624,17 +664,19 @@ class GridEnv:
                     # 3. Inject new schedule AFTER calculation delay
                     self.sim.assign_schedules(best_ind.order, best_ind.amr_assignment, job_map)
 
-                    # R2: Small fixed bonus for successful reschedule
-                    # reward += 1.0
+                    # --- R_resched: Reschedule reward (3 sub-components) ---
                     
-                    # R3: Schedule-quality reward — scales with backlog size
-                    # More unstarted jobs → bigger benefit from rescheduling
+                    # (a) Backlog-addressing bonus: reward for scheduling previously unscheduled jobs
+                    reward += BACKLOG_BONUS_SCALE * min(n_unscheduled_before, len(unstarted))
+                    
+                    # (b) Schedule-quality reward: makespan improvement
                     mk_after = self.calculate_current_makespan()
                     if mk_before > 0:
                         improvement = max((mk_before - mk_after) / mk_before, 0.0)
-                        # Scale with log(jobs) so benefit grows with backlog but doesn't explode
-                        scale = math.log(max(len(unstarted), 1) + 1)
-                        reward += 2.0 * improvement * scale
+                        reward += 3.0 * improvement  # Direct improvement, no log scaling
+                    
+                    # (c) Compute-time penalty: penalize the sim-time lost during GA
+                    reward -= COMPUTE_PENALTY * dt
 
                     self.last_resched_t = float(self.sim.t)
                     self.last_resched_version = getattr(self, "arrival_version", 0)
@@ -657,11 +699,10 @@ class GridEnv:
             if j.status == 1 and j.jid in running_jids:
                 j.status = 2  # Mark as processing
 
+        # --- R_flow: Flow-time penalty (penalize jobs sitting in active queue) ---
         reward -= len(self.active_jobs) * dt * FLOW_PENALTY
         
-        # Unscheduled-jobs pressure: penalize having unassigned work sitting around
-        # This prevents the agent from ignoring a growing backlog
-        from GA.GA import AMR_KEYS as _AMR_KEYS
+        # --- R_unsched: Unscheduled-jobs pressure (strong penalty for unaddressed backlog) ---
         _sched_jids = set()
         for _amr in _AMR_KEYS:
             _s = self.sim.amr_states[_amr]
@@ -670,7 +711,7 @@ class GridEnv:
             for _qj in self.sim.amr_queues[_amr]:
                 _sched_jids.add(_qj.idx)
         n_unscheduled = sum(1 for j in self.active_jobs if j.status == 1 and j.jid not in _sched_jids)
-        reward -= 0.02 * n_unscheduled * dt  # Explicit pressure to address unscheduled jobs
+        reward -= UNSCHED_PENALTY * n_unscheduled * dt
 
         # Sync completed jobs
         done_now = 0
@@ -684,10 +725,19 @@ class GridEnv:
                     break
         self.sim.completed_jobs_jids.clear()
         
+        # --- R_done: Small per-completion bonus ---
         if done_now > 0:
             reward += DONE_REWARD * done_now
             
         done = (self.sim_time >= CONFIG['SIM_TIME']) or (len(self.completed_jobs) >= self.total_jobs)
+        
+        # --- R_terminal: End-of-episode reward for overall quality ---
+        if done:
+            completion_ratio = len(self.completed_jobs) / max(self.total_jobs, 1)
+            # Big bonus for finishing all jobs; penalty proportional to makespan
+            reward += 50.0 * completion_ratio
+            reward -= 0.05 * self.sim_time  # Penalize slow completion
+            
         return self.get_state_arrays(), reward, done, float(dt)
 
 

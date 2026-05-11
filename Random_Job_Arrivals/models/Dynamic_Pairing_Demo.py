@@ -44,8 +44,9 @@ set_seed(42)
 
 # ======================== Files ========================
 SCHEDULE_OUTBOX = "schedule_outbox.jsonl"
-DATASET_PATH = '../../test_case/dynamic/test_dataset_r2.jsonl'
-AMR_STATE_FILE = "amr_state.json"
+DATASET_PATH = CONFIG['DATASET_PATH']
+AMR_STATE_FILE = "dynamic_amr_state.json"
+MODEL_PATH = CONFIG['SAVE_PATH'] + '/gnn_ddqn_model_v7_ep800.pth'
 
 # Reset outbox each run
 open(SCHEDULE_OUTBOX, "w").close()
@@ -64,7 +65,7 @@ def emit_assignment(amr_id: int, jid: int, jtype: str, proc_time: float, station
         f.write(json.dumps(rec) + "\n")
 
 # ======================== Config ========================
-SIM_SPEED_MULTIPLIER = 5.0     # 1.0 = real-time, 5.0 = 5x speed, etc.
+SIM_SPEED_MULTIPLIER = 1.0     # 1.0 = real-time, 5.0 = 5x speed, etc.
 UPDATE_INTERVAL_MS   = 200     # Display refresh rate — keep fast for smooth animation
 
 LEFT_LABEL_PAD = 5.5
@@ -275,7 +276,7 @@ def update_title(ax):
     completed = len(ai_env.completed_jobs) if ai_env else 0
     computing_tag = " ⏳" if is_computing else ""
     ax.set_title(
-        f"t={simulation_time:.1f}s — {status} | "
+        f"Dynamic Rescheduling \n t={simulation_time:.1f}s — {status} | "
         # f"AI: {last_action_str}{computing_tag} | "
         f"New={pending}  Active={active}  Done={completed}"
         # f"Reschedules={total_reschedule_count}"
@@ -292,7 +293,7 @@ def init_ai():
     ai_env = GridEnv()
     ai_env.reset()
 
-    model_path = CONFIG.get('SAVE_PATH', 'models/gnn_ddqn_model_v7') + '/gnn_ddqn_model_v7.pth'
+    model_path = MODEL_PATH
     ai_agent = SchedulerAgent().to(CONFIG['DEVICE'])
     if os.path.exists(model_path):
         ai_agent.load_state_dict(torch.load(model_path, map_location=CONFIG['DEVICE']))
@@ -580,6 +581,16 @@ def write_amr_state():
 
 # ======================== Main ========================
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--window_pos", type=str, default=None)
+    parser.add_argument("--state_file", type=str, default="dynamic_amr_state.json")
+    parser.add_argument("--sync_file", type=str, default=None)
+    args = parser.parse_args()
+
+    global AMR_STATE_FILE
+    AMR_STATE_FILE = args.state_file
+
     global is_running, simulation_time, accumulated_sim_dt
     global is_computing, total_reschedule_count, last_action_str
 
@@ -588,6 +599,14 @@ def main():
     init_ai()
 
     fig, ax = plt.subplots(figsize=(13, 4.8))
+    fig.canvas.manager.set_window_title("Dynamic Rescheduling")
+    
+    if args.window_pos:
+        try:
+            fig.canvas.manager.window.geometry(args.window_pos)
+        except Exception:
+            pass
+
     ax.set_ylim(AX_Y_MIN, AX_Y_MAX)
     ax.set_xlim(0.0, VIEW_WIDTH)
     ax.set_yticks([])
@@ -597,12 +616,22 @@ def main():
 
     draw_static_panels(ax)
     update_title(ax)
+    
+    # Initialize the amr_state.json with t=0 before the demo begins
+    write_amr_state()
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
 
     def tick():
         global simulation_time, is_running, accumulated_sim_dt
         global is_computing, total_reschedule_count, last_action_str
+
+        if args.sync_file:
+            try:
+                with open(args.sync_file, "r") as f:
+                    is_running = (f.read().strip() == "1")
+            except Exception:
+                pass
 
         if is_running:
             # 1) Accumulate real time → sim time
@@ -721,7 +750,17 @@ def main():
     def on_key(event):
         global is_running
         if event.key == " ":
-            is_running = not is_running
+            if args.sync_file:
+                try:
+                    with open(args.sync_file, "r") as f:
+                        val = f.read().strip()
+                    new_val = "1" if val == "0" else "0"
+                    with open(args.sync_file, "w") as f:
+                        f.write(new_val)
+                except Exception:
+                    pass
+            else:
+                is_running = not is_running
             update_title(ax)
             fig.canvas.draw_idle()
 

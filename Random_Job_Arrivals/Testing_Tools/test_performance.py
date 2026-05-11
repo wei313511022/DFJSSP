@@ -231,9 +231,9 @@ def run_test(model_path, output_csv):
     env = GridEnv()
     agent = load_agent(model_path)
 
-    # TEST_EPISODES = len(env.episodes)
-    TEST_EPISODES = 10
-    FIX_PERIOD = 50.0  # ✅ 你要的固定時間 reschedule
+    TEST_EPISODES = len(env.episodes)
+    # TEST_EPISODES = 10
+    FIX_PERIOD = 10.0  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv

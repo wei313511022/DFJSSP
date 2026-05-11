@@ -43,8 +43,11 @@ set_seed(42)
 
 # ======================== Files ========================
 SCHEDULE_OUTBOX = "schedule_outbox.jsonl"
-DATASET_PATH = '../../test_case/dynamic/test_dataset_r2.jsonl'
-AMR_STATE_FILE = "amr_state.json"
+DATASET_PATH = CONFIG['DATASET_PATH']
+AMR_STATE_FILE = "periodic_amr_state.json"
+MODEL_PATH = CONFIG['SAVE_PATH'] + '/gnn_ddqn_model_v7_ep800.pth'
+
+FIX_PERIOD = 10.0
 
 
 # Reset outbox each run
@@ -121,6 +124,7 @@ ai_env: GridEnv = None
 ai_agent: SchedulerAgent = None
 total_reschedule_count: int = 0
 last_action_str: str = "INIT"
+last_fix_trigger_t: float = -1e9  # Track when periodic reschedule was TRIGGERED (not completed)
 
 # Threading & Multiprocessing state
 ga_result_queue: Queue = Queue()   # background thread → main thread
@@ -275,6 +279,7 @@ def update_title(ax):
     completed = len(ai_env.completed_jobs) if ai_env else 0
     computing_tag = " ⏳" if is_computing else ""
     ax.set_title(
+        f"Periodic Rescheduling (Period={FIX_PERIOD}s)\n"
         f"t={simulation_time:.1f}s — {status} | "
         # f"AI: {last_action_str}{computing_tag} | "
         f"New={pending}  Active={active}  Done={completed}"
@@ -292,7 +297,7 @@ def init_ai():
     ai_env = GridEnv()
     ai_env.reset()
 
-    model_path = CONFIG.get('SAVE_PATH', 'models/gnn_ddqn_model_v7') + '/gnn_ddqn_model_v7.pth'
+    model_path = MODEL_PATH
     ai_agent = SchedulerAgent().to(CONFIG['DEVICE'])
     if os.path.exists(model_path):
         ai_agent.load_state_dict(torch.load(model_path, map_location=CONFIG['DEVICE']))
@@ -399,6 +404,11 @@ def start_background_ga():
 
     is_computing = True
     last_action_str = "COMPUTING..."
+    
+    # Record trigger time for periodic interval measurement (matches test_performance's last_fix)
+    global last_fix_trigger_t
+    last_fix_trigger_t = ai_env.sim_time
+    
     print(f"[AI] t={ai_env.sim_time:.1f}  Started GA in background | "
           f"{len(unstarted)} unstarted jobs")
 
@@ -575,6 +585,16 @@ def write_amr_state():
 
 # ======================== Main ========================
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--window_pos", type=str, default=None)
+    parser.add_argument("--state_file", type=str, default="periodic_amr_state.json")
+    parser.add_argument("--sync_file", type=str, default=None)
+    args = parser.parse_args()
+
+    global AMR_STATE_FILE
+    AMR_STATE_FILE = args.state_file
+
     global is_running, simulation_time, accumulated_sim_dt
     global is_computing, total_reschedule_count, last_action_str
 
@@ -583,6 +603,14 @@ def main():
     init_ai()
 
     fig, ax = plt.subplots(figsize=(13, 4.8))
+    fig.canvas.manager.set_window_title(f"Periodic Rescheduling (Period={FIX_PERIOD}s)")
+    
+    if args.window_pos:
+        try:
+            fig.canvas.manager.window.geometry(args.window_pos)
+        except Exception:
+            pass
+
     ax.set_ylim(AX_Y_MIN, AX_Y_MAX)
     ax.set_xlim(0.0, VIEW_WIDTH)
     ax.set_yticks([])
@@ -592,12 +620,22 @@ def main():
 
     draw_static_panels(ax)
     update_title(ax)
+    
+    # Initialize the amr_state.json with t=0 before the demo begins
+    write_amr_state()
 
     timer = fig.canvas.new_timer(interval=UPDATE_INTERVAL_MS)
 
     def tick():
         global simulation_time, is_running, accumulated_sim_dt
         global is_computing, total_reschedule_count, last_action_str
+
+        if args.sync_file:
+            try:
+                with open(args.sync_file, "r") as f:
+                    is_running = (f.read().strip() == "1")
+            except Exception:
+                pass
 
         if is_running:
             # 1) Accumulate real time → sim time
@@ -641,10 +679,11 @@ def main():
             except Empty:
                 pass
 
-            # 5) Fixed Period Reschedule (10 sec) — only when not already computing and sim stepped
+            # 5) Fixed Period Reschedule — only when not already computing and sim stepped
+            #    Use last_fix_trigger_t (trigger time) to match test_performance's behavior
             if not is_computing and steps_this_tick > 0:
                 unstarted = any(j.status == 1 for j in ai_env.active_jobs)
-                if unstarted and (ai_env.last_resched_t < 0 or (ai_env.sim_time - ai_env.last_resched_t) >= 10.0):
+                if unstarted and (last_fix_trigger_t < 0 or (ai_env.sim_time - last_fix_trigger_t) >= FIX_PERIOD):
                     start_background_ga()
                 else:
                     last_action_str = "WAIT"
@@ -700,7 +739,17 @@ def main():
     def on_key(event):
         global is_running
         if event.key == " ":
-            is_running = not is_running
+            if args.sync_file:
+                try:
+                    with open(args.sync_file, "r") as f:
+                        val = f.read().strip()
+                    new_val = "1" if val == "0" else "0"
+                    with open(args.sync_file, "w") as f:
+                        f.write(new_val)
+                except Exception:
+                    pass
+            else:
+                is_running = not is_running
             update_title(ax)
             fig.canvas.draw_idle()
 

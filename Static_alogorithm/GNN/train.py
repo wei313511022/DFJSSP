@@ -6,7 +6,7 @@ import random
 
 # Import from the GNN script
 from GNN import SchedulerGNN, solve_with_gnn
-from GA_code.GA import make_jobs, describe_solution, local_improve, routing_iters, collision_routing_iters
+from GA.GA import make_jobs, describe_solution, local_improve, routing_iters, collision_routing_iters
 
 def train(args):
     # Setup
@@ -14,12 +14,12 @@ def train(args):
     print(f"Training on: {device}")
     
     # Hyperparameters
-    num_epochs = 1000
+    num_epochs = 10000
     batch_size = 16 # Number of episodes (schedules) to sample before a weight update
     lr = 1e-3
     
     # Load test case if specified
-    from GA_code.GA import load_dispatch_events
+    from GA.GA import load_dispatch_events
     dispatch_events = []
     if args.inbox:
         from pathlib import Path

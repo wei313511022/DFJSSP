@@ -48,7 +48,7 @@ GENERATIONS = 150
 MUTATION_RATE = 0.2     
 STAGNATION_LIMIT = 40   # number of convergence iterations 
 routing_iters = 1000
-collision_routing_iters = 2000
+collision_routing_iters = 1
 
 # MAX_DEPTH limits the Space-Time A* search horizon (moves + waits).
 # It prevents infinite searches in highly congested scenarios.
@@ -735,6 +735,31 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
             else:
                 if next_step in occupied:
                     next_step = p
+                elif next_step != p:
+                    occupant = None
+                    for o in AMR_KEYS:
+                        if o == amr: continue
+                        if o not in moves and positions[o] == next_step:
+                            occupant = o
+                            break
+                    if occupant:
+                        escape_found = False
+                        for dx, dy in [(0,1),(1,0),(0,-1),(-1,0)]:
+                            adj = (next_step[0]+dx, next_step[1]+dy)
+                            if not _is_within_bounds(adj) or adj in OBSTACLES: continue
+                            if adj in occupied or adj == p: continue
+                            is_empty = True
+                            for a in AMR_KEYS:
+                                if a == occupant: continue
+                                pos_a = moves.get(a, positions[a])
+                                if pos_a == adj:
+                                    is_empty = False
+                                    break
+                            if is_empty:
+                                escape_found = True
+                                break
+                        if not escape_found:
+                            next_step = p
             
             moves[amr] = next_step
             occupied.add(next_step)
@@ -743,7 +768,7 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
             m = s['mode']
             if moves[amr] == p and g != p:
                 s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
-                if s['blocked_ticks'] > 5 and m == 'moving_base':
+                if s['blocked_ticks'] > 5 and m in ['moving_base', 'moving_station', 'moving_supply']:
                     possible_dodges = []
                     for dy in [0, 1, 8, 9]:
                         for dx in range(0, GRID_MAX_X + 1):
@@ -751,7 +776,8 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
                             if dpos not in OBSTACLES:
                                 possible_dodges.append(dpos)
                     if possible_dodges:
-                        s['goal'] = random.choice(possible_dodges)
+                        s['dodge_goal'] = random.choice(possible_dodges)
+                        s['dodge_ticks'] = 10
                         s['blocked_ticks'] = 0
             else:
                 s['blocked_ticks'] = 0

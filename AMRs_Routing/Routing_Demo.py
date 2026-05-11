@@ -13,13 +13,14 @@ Controls:
 import os
 import json
 import math
+import argparse
 from typing import Dict, Tuple, Optional, Set, List
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 
 # ---------- Files ----------
-AMR_STATE_FILE = "../Random_Job_Arrivals/models/amr_state.json"
+AMR_STATE_FILE = "../Random_Job_Arrivals/models/dynamic_amr_state.json"
 
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 11
@@ -111,7 +112,7 @@ def draw_static(ax):
         )
         ax.text(
             sx - 0.4, sy + 0.15, f"S{sid}",
-            fontsize=11, color="tab:red", weight="bold", zorder=3,
+            fontsize=9, color="tab:red", weight="bold", zorder=3,
         )
 
     # material stations (blue)
@@ -125,7 +126,7 @@ def draw_static(ax):
         )
         ax.text(
             mx - 0.4, my + 0.15, f"M{jt}",
-            fontsize=11, color="tab:blue", weight="bold", zorder=3,
+            fontsize=9, color="tab:blue", weight="bold", zorder=3,
         )
 
 
@@ -214,15 +215,33 @@ def apply_state(amrs: Dict[int, AMRVisual], state: dict):
 # ---------- Main ----------
 
 def main():
+    parser = argparse.ArgumentParser(description="AMR Routing Demo")
+    parser.add_argument("--state_file", type=str, default="../Random_Job_Arrivals/models/dynamic_amr_state.json", help="Path to amr_state.json")
+    parser.add_argument("--window_pos", type=str, default=None, help="Window geometry e.g., +100+100")
+    parser.add_argument("--title", type=str, default="Route Map", help="Title of the window and plot")
+    parser.add_argument("--sync_file", type=str, default=None)
+    args = parser.parse_args()
+
+    global AMR_STATE_FILE
+    AMR_STATE_FILE = args.state_file
+
     fig, ax = plt.subplots(figsize=(8, 8))
     fig.subplots_adjust(bottom=0.2)
+    fig.canvas.manager.set_window_title(args.title)
+    
+    if args.window_pos:
+        try:
+            # For TkAgg
+            fig.canvas.manager.window.geometry(args.window_pos)
+        except Exception:
+            pass
 
     draw_static(ax)
     amrs = create_amrs(ax)
 
     # Timer text above the map
     timer_text = fig.text(
-        0.5, 0.9, "Route Map (Viewer)",
+        0.5, 0.9, args.title,
         ha="center", va="bottom", fontsize=16, weight="bold",
         transform=fig.transFigure,
     )
@@ -235,7 +254,7 @@ def main():
         status_texts[k] = fig.text(
             0.5, base_y + (4 - k) * line_dy,
             f"AMR{k}: waiting for state...",
-            fontsize=14, ha="center", va="bottom",
+            fontsize=11, ha="center", va="bottom",
             transform=fig.transFigure,
         )
 
@@ -246,6 +265,13 @@ def main():
 
     def tick():
         nonlocal is_running, last_sim_time
+
+        if args.sync_file:
+            try:
+                with open(args.sync_file, "r") as f:
+                    is_running = (f.read().strip() == "1")
+            except Exception:
+                pass
 
         if not is_running:
             timer.start()
@@ -278,15 +304,15 @@ def main():
                 f"C{inv.get('C', 0)}"
             )
             phase_str = vis.phase if vis.phase else "-"
-
+            job_str = f"Job{vis.job_idx}" if vis.job_idx is not None else "-"
             if vis.mode == "processing":
                 status_str = (
                     f"AMR{k}: processing ({vis.proc_ticks}s left), "
-                    f"{phase_str}, {inv_str}, "
+                    f"{job_str}, {inv_str}, "
                     f"(x:{vis.x:.0f} y:{vis.y:.0f})"
                 )
             elif vis.mode in ("moving_supply", "moving_station", "moving_base"):
-                job_str = f"Job{vis.job_idx}" if vis.job_idx is not None else "-"
+                
                 status_str = (
                     f"AMR{k}: {vis.mode}, {phase_str}, {job_str}, "
                     f"{inv_str}, (x:{vis.x:.0f} y:{vis.y:.0f})"
@@ -297,13 +323,13 @@ def main():
                     f"(x:{vis.x:.0f} y:{vis.y:.0f})"
                 )
 
-            if vis.queue_jids:
-                status_str += f" | queue={vis.queue_jids}"
+            # if vis.queue_jids:
+            #     status_str += f" | queue={vis.queue_jids}"
 
             status_texts[k].set_text(status_str)
 
         # 3) Update timer display
-        timer_text.set_text(f"Route Map (Viewer)  —  Sim Time: {last_sim_time:.0f}s")
+        timer_text.set_text(f"{args.title}  —  Sim Time: {last_sim_time:.0f}s")
 
         fig.canvas.draw_idle()
         timer.start()
@@ -311,7 +337,17 @@ def main():
     def on_key(e):
         nonlocal is_running
         if e.key == " ":
-            is_running = not is_running
+            if args.sync_file:
+                try:
+                    with open(args.sync_file, "r") as f:
+                        val = f.read().strip()
+                    new_val = "1" if val == "0" else "0"
+                    with open(args.sync_file, "w") as f:
+                        f.write(new_val)
+                except Exception:
+                    pass
+            else:
+                is_running = not is_running
 
     fig.canvas.mpl_connect("key_press_event", on_key)
     timer.add_callback(tick)
