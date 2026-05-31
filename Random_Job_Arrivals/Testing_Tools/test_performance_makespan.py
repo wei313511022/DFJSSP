@@ -8,6 +8,7 @@ import csv
 import argparse
 import importlib
 import sys
+import math
 
 GLOBAL_SEED = 42
 
@@ -36,19 +37,18 @@ def episode_metrics(env):
     if total_jobs == 0:
         return 0.0, 1000.0, 1000.0
 
-    finished_in = sum(1 for j in env.completed_jobs if getattr(j, "finish_ts", 1000.0) <= CONFIG['SIM_TIME'])
+    finished_in = len(env.completed_jobs)
     done_pct = (finished_in / total_jobs) * 100.0
 
     flows = [j.finish_ts - j.arrival_ts for j in env.completed_jobs if j.finish_ts >= 0]
     flow = float(np.mean(flows)) if flows else 1000.0
 
-    # Makespan: last completion - first arrival (completed set)
+    # Makespan: last completion timestamp (i.e. time when all jobs are finished)
     if env.completed_jobs:
-        first_arr = min(j.arrival_ts for j in env.completed_jobs)
-        last_fin  = max(j.finish_ts  for j in env.completed_jobs)
-        mk = float(last_fin - first_arr)
+        last_fin  = max(j.finish_ts for j in env.completed_jobs)
+        mk = float(last_fin)
     else:
-        mk = 1000.0
+        mk = 10000.0
 
     return done_pct, flow, mk
 
@@ -98,18 +98,11 @@ def run_one_episode_ai(env, agent, verbose=True, print_q=False):
     Runs one episode using agent policy.
     Prints:
       - [AI-DECIDE] decision-time info (before env.step)
-      - [ARRIVE]   jobs moved from queue to floor (active_jobs)
-      - [DISPATCH]  AMR local_queue changes (GA assignment)
-      - [DONE]      job completions
       - [AI-AFTER]  after-step info including GA time + mask_after
     """
     state = env.reset()
     total_ga = 0.0
     step_i = 0
-
-    # initial snapshots
-    before_active, before_q_len, before_done = snapshot_env(env)
-    before_lqs = get_local_queues(env)
 
     while True:
         step_i += 1
@@ -146,10 +139,6 @@ def run_one_episode_ai(env, agent, verbose=True, print_q=False):
                     msg += f" | Q={q_cpu}"
                 print(msg)
 
-        # snapshot BEFORE step
-        b_active, b_q_len, b_done = snapshot_env(env)
-        b_lqs = get_local_queues(env)
-
         # --- step ---
         next_state, _, done, _ = env.step(action)
         state = next_state
@@ -158,40 +147,13 @@ def run_one_episode_ai(env, agent, verbose=True, print_q=False):
         ga_sec = float(getattr(env, "last_ga_compute_time", 0.0))
         total_ga += ga_sec
 
-        # snapshot AFTER step
-        a_active, a_q_len, a_done = snapshot_env(env)
-        a_lqs = get_local_queues(env)
-
-        # # --- 1) ARRIVE log (queue -> active_jobs) ---
-        # new_active = sorted(set(a_active) - set(b_active))
-        # if verbose and len(new_active) > 0:
-        #     print(f"  [ARRIVE] t={t_decide:6.1f}->{env.sim_time:6.1f} "
-        #           f"NEW JOBS +{len(new_active)}: {new_active} "
-        #           f"| REMAIN JOBS {b_q_len}->{a_q_len} | active {len(b_active)}->{len(a_active)}")
-
-        # # --- 2) DONE log (completed jobs) ---
-        # new_done = sorted(set(a_done) - set(b_done))
-        # if verbose and len(new_done) > 0:
-        #     print(f"  [DONE]    t={t_decide:6.1f}->{env.sim_time:6.1f} "
-        #           f"completed +{len(new_done)}: {new_done} "
-        #           f"| done_now={len(env.completed_jobs)}")
-
-        # # --- 3) DISPATCH log (local_queue changes) ---
-        # # if verbose and a_lqs != b_lqs:
-        # #     for i, (lb, la) in enumerate(zip(b_lqs, a_lqs)):
-        # #         if lb != la:
-        # #             print(f"  [DISPATCH] AMR{i} local_queue: {lb} -> {la}")
-
-        # # --- 4) AFTER-step log (show GA time + mask_after) ---
+        # --- AFTER-step log (show GA time + mask_after) ---
         if verbose and action == 1:
             unstarted_after = sum(1 for j in env.active_jobs if getattr(j, "status", 0) == 1)
             mask_after = env.get_action_mask()
             print(f"[AI-AFTER ] t={env.sim_time:6.1f} step={step_i:4d} "
                   f"GA={ga_sec*1000.0:7.2f} ms | active={len(env.active_jobs)} unstarted={unstarted_after} "
                   f"| mask_after={mask_after}")
-            # for i, (lb, la) in enumerate(zip(b_lqs, a_lqs)):
-            #     # if lb != la:
-            #     print(f"  [DISPATCH] AMR{i} local_queue: {lb} -> {la}")
 
         if done:
             break
@@ -208,7 +170,6 @@ def run_one_episode_fix(env, period=5.0):
     last_fix = -1e9
 
     while True:
-        # 每固定時間 reschedule（period 秒一次）
         try:
             can = env.get_action_mask()[1] > 0.5
         except Exception:
@@ -231,11 +192,11 @@ def run_one_episode_fix(env, period=5.0):
 
 def run_test(model_path, output_csv):
     set_seed(GLOBAL_SEED)  # Global seed for reproducibility
-    env = GridEnv()
+    env = MakespanGridEnv()
     agent = load_agent(model_path)
 
     TEST_EPISODES = min(10, len(env.episodes))
-    FIX_PERIOD = 10.0  # ✅ 你要的固定時間 reschedule
+    FIX_PERIOD = 10.0  # 固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv
@@ -247,6 +208,7 @@ def run_test(model_path, output_csv):
     print("-" * 120)
 
     ai_flows, fix_flows = [], []
+    ai_mks, fix_mks = [], []
     
     # Metrics storage
     metrics = {
@@ -269,6 +231,8 @@ def run_test(model_path, output_csv):
 
         ai_flows.append(ai_flow)
         fix_flows.append(fix_flow)
+        ai_mks.append(ai_mk)
+        fix_mks.append(fix_mk)
         
         metrics["ai_done"].append(ai_done)
         metrics["fix_done"].append(fix_done)
@@ -279,19 +243,17 @@ def run_test(model_path, output_csv):
         metrics["ai_ga"].append(ai_ga_ms)
         metrics["fix_ga"].append(fix_ga_ms)
 
-        # Winner: Throughput > Flow > GA (你也可以改你的排序)
-        if ai_done > fix_done:
+        # Winner: Makespan (Lower) > Flow (Lower) > GA overhead (Lower)
+        if ai_mk < fix_mk:
             win = "AI"
-        elif fix_done > ai_done:
+        elif fix_mk < ai_mk:
             win = "Fix"
         else:
-            # 同 done，比 flow
             if ai_flow < fix_flow:
                 win = "AI"
             elif fix_flow < ai_flow:
                 win = "Fix"
             else:
-                # flow 也一樣，比 GA overhead
                 win = "AI" if ai_ga_ms < fix_ga_ms else "Fix"
 
         print(f"{ep:<4} | {ai_done:<10.1f} {fix_done:<11.1f} | {ai_flow:<7.1f} {fix_flow:<8.1f} | "
@@ -301,19 +263,32 @@ def run_test(model_path, output_csv):
 
     csv_file.close()
 
-    # Plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(ai_flows, label="AI Flow", marker="o")
-    plt.plot(fix_flows, label="Fix Flow", linestyle="--")
-    plt.title("Average Flow Time (Lower is Better)")
-    plt.xlabel("Episode")
-    plt.ylabel("Seconds")
-    plt.legend()
+    # Beautiful side-by-side plots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
+    # Plot Makespan
+    ax1.plot(ai_mks, label="AI Makespan", marker="o", color="#1f77b4", linewidth=2)
+    ax1.plot(fix_mks, label="Fix Makespan", marker="s", linestyle="--", color="#ff7f0e", linewidth=2)
+    ax1.set_title("Makespan / Completion Time (Lower is Better)", fontsize=12, fontweight='bold')
+    ax1.set_xlabel("Episode", fontsize=10)
+    ax1.set_ylabel("Seconds", fontsize=10)
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.legend()
+    
+    # Plot Flow Time
+    ax2.plot(ai_flows, label="AI Flow Time", marker="o", color="#2ca02c", linewidth=2)
+    ax2.plot(fix_flows, label="Fix Flow Time", marker="s", linestyle="--", color="#d62728", linewidth=2)
+    ax2.set_title("Average Flow Time (Lower is Better)", fontsize=12, fontweight='bold')
+    ax2.set_xlabel("Episode", fontsize=10)
+    ax2.set_ylabel("Seconds", fontsize=10)
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    ax2.legend()
+    
+    plt.tight_layout()
     base_name = os.path.splitext(output_csv)[0]
     plot_filename = f"{base_name}.png"
-    plt.savefig(plot_filename)
-    plt.show()
+    plt.savefig(plot_filename, dpi=300)
+    plt.close()
 
     print(f"\nResults saved to {plot_filename}")
     print(f"Episode data saved to {csv_filename}")
@@ -344,9 +319,9 @@ def run_test(model_path, output_csv):
     print(f"Summary table saved to {summary_filename}")
   
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
+    parser = argparse.ArgumentParser(description="Run performance makespan test with a specific model.")
     parser.add_argument("--model", type=str, default="../models_pth/gnn_ddqn_model_v7/gnn_ddqn_model_v7.pth", help="Path to the model file")
-    parser.add_argument("--output", type=str, default="../models_pth/gnn_ddqn_model_v7/benchmark_results.csv", help="Path to the output CSV file")
+    parser.add_argument("--output", type=str, default="../models_pth/gnn_ddqn_model_v7/benchmark_makespan_results.csv", help="Path to the output CSV file")
     parser.add_argument("--module", type=str, default="models.GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
     args = parser.parse_args()
 
@@ -363,6 +338,15 @@ if __name__ == "__main__":
     except ImportError as e:
         print(f"Error importing module {args.module}: {e}")
         sys.exit(1)
+
+    # Subclass GridEnv to override simulation completion criteria
+    class MakespanGridEnv(GridEnv):
+        def step(self, action: int):
+            # Call parent step
+            state, reward, done, dt = super().step(action)
+            # Force done to ONLY be true when all jobs are completed (or safety timeout 10000.0 is hit)
+            done = (self.sim_time >= 10000.0) or (len(self.completed_jobs) >= self.total_jobs)
+            return state, reward, done, dt
 
     CONFIG['DATASET_PATH'] = "../../test_case/dynamic/test_dataset_demo.jsonl"
     CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'

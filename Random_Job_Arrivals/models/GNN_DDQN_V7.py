@@ -51,7 +51,7 @@ CONFIG = {
     'SCALE': 1.0,
     'AMR_SPEED': 1.0,
     'CAPACITY_PER_TYPE': 3,
-    'SIM_TIME': 1000.0,  # Max sim time per episode
+    'SIM_TIME': 250.0,  # Max sim time per episode
     'SIM_TIME_SCALE': 25.0, # For normalizing time features
     'COMPUTE_TIME_SCALING': 1.0,  # Reduced from 30: less sim-time cost per reschedule
     
