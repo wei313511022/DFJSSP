@@ -107,7 +107,7 @@ def solve_vrp_from_jobs(
         model.Params.TimeLimit = float(time_limit)
     model.Params.MIPGap = 0.0
     model.Params.OutputFlag = 1
-    model.Params.Threads = 1
+    model.Params.Threads = 4
     # Helpful when you care about proving optimality (may take longer to find first feasible).
     try:
         model.Params.MIPFocus = 2

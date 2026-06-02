@@ -17,7 +17,7 @@ import json
 import os
 from typing import Optional
 
-from MILP_inhance import (
+from MILP import (
     solve_vrp_from_jobs,
     INBOX,
     SCHEDULE_OUTBOX,

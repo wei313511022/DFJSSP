@@ -1,5 +1,0 @@
-{"generated_at": 12.875971537663862, "amr": 3, "jid": 6, "type": "B", "proc_time": 15.0, "transport_time": 16.0, "station": "5", "pickup_node": 2, "delivery_node": 91, "refill": true, "q_after": 2}
-{"generated_at": 12.875971537663862, "amr": 1, "jid": 8, "type": "A", "proc_time": 10.0, "transport_time": 16.0, "station": "5", "pickup_node": 8, "delivery_node": 91, "refill": true, "q_after": 2}
-{"generated_at": 12.875971537663862, "amr": 2, "jid": 9, "type": "C", "proc_time": 20.0, "transport_time": 17.0, "station": "5", "pickup_node": 2, "delivery_node": 91, "refill": true, "q_after": 2}
-{"generated_at": 12.875971537663862, "amr": 1, "jid": 7, "type": "B", "proc_time": 15.0, "transport_time": 2.0, "station": "4", "pickup_node": 91, "delivery_node": 93, "refill": false, "q_after": 2}
-{"generated_at": 12.875971537663862, "amr": 1, "jid": 5, "type": "B", "proc_time": 15.0, "transport_time": 4.0, "station": "2", "pickup_node": 93, "delivery_node": 97, "refill": false, "q_after": 1}
