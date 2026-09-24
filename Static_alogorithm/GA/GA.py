@@ -363,6 +363,33 @@ def _diagnose_and_print_failure(amr: str, job_id: int, path_type: str, start_pos
     print(f"  [WARNING] Pathfinding failed for AMR '{amr}' on Job {job_id} ({path_type} path: {start_pos} -> {end_pos} at t={start_time:.1f}).")
     print(f"  [DIAGNOSIS] Reason: {reason}")
 
+# ---------------------------------------------------------------------------
+# Station calendar
+# ---------------------------------------------------------------------------
+# FIX: each station keeps a full calendar of busy intervals instead of a single
+# "free after the last job decoded here" time. With one number, a robot that
+# reached an idle station early still had to wait for whichever job happened to be
+# decoded last there, so the score depended on how robots were interleaved in
+# `order` rather than on the physical plan (measured: grouped-by-robot orders scored
+# 22-70% worse than the same plan interleaved).
+def _earliest_fit(intervals: List[Tuple[float, float]], ready: float, duration: float) -> float:
+    """Earliest start >= ready such that [start, start+duration) overlaps no interval.
+    `intervals` is kept sorted by start time."""
+    start = ready
+    for busy_start, busy_end in intervals:
+        if start + duration <= busy_start:
+            break
+        if busy_end > start:
+            start = busy_end
+    return start
+
+
+def _book(intervals: List[Tuple[float, float]], start: float, end: float) -> None:
+    """Insert [start, end) into a sorted interval list."""
+    intervals.append((start, end))
+    intervals.sort()
+
+
 def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = False, check_collision: bool = False, init_state: dict = None) -> Tuple[Dict[str, float], List[Tuple], List[Tuple[int, float]], Dict[str, List[Tuple[int, int]]], int]:
     job_map = {job.idx: job for job in jobs} # get job information
     timelines: List[Tuple] = []
@@ -385,7 +412,9 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
     path_logs = {amr: [current_position[amr]] for amr in AMR_STARTS} if need_log else {}
     reservations: Dict[Tuple[Tuple[int, int], int], str] = {} # ((x, y), t) -> amr_id
     
-    station_available = {station: 0.0 for station in STATIONS} # station availability time
+    # Busy intervals per station (see _earliest_fit). Replaces the old single
+    # station_available[station] time.
+    station_calendar: Dict[str, List[Tuple[float, float]]] = {station: [] for station in STATIONS}
     order = individual.order
     queue_infos: List[Tuple[int, float]] = []
     invalid_jobs_count = 0
@@ -406,12 +435,13 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
             else:
                 supply_path = shortest_path(current_position[amr], supply_location)
             supply_time = int(len(supply_path) - 1)
-            supply_end = start_time + supply_time
             if supply_time == 0 and current_position[amr] != supply_location:
                 supply_time = MAX_DEPTH
                 invalid_jobs_count += 1
                 if need_log and check_collision:
                     _diagnose_and_print_failure(amr, job.idx, "supply", current_position[amr], supply_location, start_time, reservations, amr_states)
+            # FIX: computed AFTER the penalty, so a failed supply trip is actually charged.
+            supply_end = start_time + supply_time
             if check_collision:
                 # Reserve path
                 for t_offset, pt in enumerate(supply_path):
@@ -453,7 +483,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
         if need_log: _extend_path_log(path_logs, amr, travel_path)
 
         # Wait station availability if needed
-        earliest_start = max(travel_end, station_available[job.station])
+        earliest_start = _earliest_fit(station_calendar[job.station], travel_end, job.duration)
         if need_log and earliest_start > travel_end:
              timelines.append((amr, travel_end, earliest_start, "wait", "Wait Stn"))
         process_start = earliest_start
@@ -468,7 +498,7 @@ def decode_schedule(individual: Individual, jobs: List[Job], need_log: bool = Fa
             amr_states[amr] = (STATIONS[job.station], process_end)
             
         inventory[amr][material] -= 1
-        station_available[job.station] = process_end # Occupy station
+        _book(station_calendar[job.station], process_start, process_end)  # Occupy station
         
         # Look-ahead Return Logic: Decide what to do after the job is done.
         next_job = get_next_job_for_amr(amr, pos, order, individual.amr_assignment, jobs, job_map=job_map)
@@ -525,11 +555,15 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
 
     job_map = {job.idx: job for job in jobs}
     amr_queues = {amr: deque() for amr in AMR_STARTS}
-    for job_idx, amr in zip(individual.order, individual.amr_assignment):
-        amr_queues[amr].append(job_map[job_idx])
-        
+    # FIX: amr_assignment is indexed by JOB ID (the convention used by decode_schedule,
+    # mutate, crossover and GNN.py). The old zip(order, amr_assignment) paired the k-th
+    # job in the order with the robot of job k, so jobs went to the wrong robots.
+    for job_idx in individual.order:
+        amr_queues[individual.amr_assignment[job_idx]].append(job_map[job_idx])
+
     t = int(init_state["time"]) if init_state else 0
-    
+    t0 = t
+
     if init_state:
         positions = {amr: init_state["positions"].get(amr, AMR_STARTS[amr]) for amr in AMR_STARTS}
         inventory = {amr: init_state["inventory"].get(amr, {mat: 0 for mat in TYPE_DURATION.keys()}).copy() for amr in AMR_STARTS}
@@ -553,8 +587,16 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
     invalid_jobs_count = 0
     
     station_occupied = {s: False for s in STATIONS}
-    
-    t = 0
+
+    # FIX: per-robot finish time = last tick the robot arrived back at its base.
+    # Previously every robot reported the same global end time, which zeroed the
+    # load-balance term in fitness() and made local_improve always pick AMR1 as critical.
+    finish: Dict[str, Optional[float]] = {amr: None for amr in AMR_KEYS}
+    had_work = {amr: bool(amr_queues[amr]) or amr_states[amr]['mode'] != 'idle'
+                or positions[amr] != AMR_STARTS[amr] for amr in AMR_KEYS}
+
+    # FIX: the clock is no longer reset to 0 here. With init_state, t starts at
+    # init_state["time"], so makespan = finish - init_state["time"] is correct.
     while True:
         all_idle_and_empty = True
         for amr in AMR_KEYS:
@@ -563,9 +605,9 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
                 break
         if all_idle_and_empty:
             break
-            
-        if t > 10000:
-            print(f"\\n--- DEADLOCK DETECTED at t={t} ---")
+
+        if t - t0 > 10000:
+            print(f"\n--- DEADLOCK DETECTED at t={t} ---")
             for amr in AMR_KEYS:
                 print(f"{amr}: pos={positions[amr]}, mode={amr_states[amr]['mode']}, goal={amr_states[amr]['goal']}")
             invalid_jobs_count += 1
@@ -769,11 +811,16 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
             if moves[amr] == p and g != p:
                 s['blocked_ticks'] = s.get('blocked_ticks', 0) + 1
                 if s['blocked_ticks'] > 5 and m in ['moving_base', 'moving_station', 'moving_supply']:
+                    # FIX: dodge rows are taken from the real grid bounds. The old
+                    # hard-coded rows [0, 1, 8, 9] included y=0, which is outside the
+                    # grid (y runs 1..9), so a robot sent there could not move at all.
                     possible_dodges = []
-                    for dy in [0, 1, 8, 9]:
-                        for dx in range(0, GRID_MAX_X + 1):
+                    dodge_rows = sorted({GRID_MIN_Y, GRID_MIN_Y + 1, GRID_MAX_Y - 1, GRID_MAX_Y})
+                    blocked_cells = OBSTACLES | set(STATIONS.values()) | set(BASES)
+                    for dy in dodge_rows:
+                        for dx in range(GRID_MIN_X, GRID_MAX_X + 1):
                             dpos = (dx, dy)
-                            if dpos not in OBSTACLES:
+                            if dpos not in blocked_cells:
                                 possible_dodges.append(dpos)
                     if possible_dodges:
                         s['dodge_goal'] = random.choice(possible_dodges)
@@ -809,14 +856,24 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
                 
             elif s['mode'] == 'moving_base' and p == s['goal']:
                 s['mode'] = 'idle'
+                finish[amr] = float(t + 1)  # home at the end of this tick
                 if need_log:
                     dur = t - s.get('route_start', t)
                     if dur > 0: timelines.append((amr, s['route_start'], t, "return", f"Return {dur}s"))
 
         # End of tick
         t += 1
-        
-    avail = {a: float(t) for a in AMR_KEYS}
+
+    # Robots that never left base finish at the start time; robots still out
+    # (deadlock) finish at the time the simulation stopped.
+    avail = {}
+    for a in AMR_KEYS:
+        if finish[a] is not None and amr_states[a]['mode'] == 'idle' and not amr_queues[a]:
+            avail[a] = finish[a]
+        elif not had_work[a]:
+            avail[a] = float(t0)
+        else:
+            avail[a] = float(t)
     return avail, timelines, queue_infos, path_logs, invalid_jobs_count
 
 
@@ -870,9 +927,32 @@ def order_crossover(parent_a: Individual, parent_b: Individual, jobs: List[Job])
         # 50% chance to inherit AMR assignment from parent B or parent A
         if random.random() < 0.5:
             child_assign[idx] = parent_b.amr_assignment[idx]
-    # Reorder the job order so that Jobs on the same AMR and of the same job type are grouped together as much as possible 
-    clustered_order = cluster_jobs_by_material(child_order, child_assign, jobs)
-    return Individual(order=clustered_order, amr_assignment=child_assign)
+    # FIX: the child is NO LONGER re-sorted by (robot, type). That sort forced every child
+    # into "robot 1's jobs, then robot 2's ..., each robot A->B->C", threw away the order
+    # the parents carried, and made the GA unable to try interleaved orders. Grouping
+    # same-type jobs is now an occasional mutation (see group_same_type_mutate).
+    return Individual(order=child_order, amr_assignment=child_assign)
+
+
+CLUSTER_MUTATION_RATE = 0.2  # chance per child of grouping one (robot, type) set of jobs
+
+def group_same_type_mutate(individual: Individual, jobs: List[Job]) -> None:
+    """Pick one job and pull every job with the same robot and type next to it,
+    at the position of the first of them. Other jobs keep their relative order.
+    Replaces the old forced full sort, which also ordered types alphabetically."""
+    job_map = {job.idx: job for job in jobs}
+    order = individual.order
+    if len(order) < 2:
+        return
+    pick = random.choice(order)
+    key = (individual.amr_assignment[pick], job_map[pick].type_)
+    group = [j for j in order if (individual.amr_assignment[j], job_map[j].type_) == key]
+    if len(group) < 2:
+        return
+    first_pos = order.index(group[0])
+    rest = [j for j in order if j not in set(group)]
+    insert_at = sum(1 for j in order[:first_pos] if j not in set(group))
+    individual.order = rest[:insert_at] + group + rest[insert_at:]
 
 # Moves a job from the busiest AMR to the idlest AMR.
 def smart_load_balance_mutate(individual: Individual, jobs: List[Job], init_state: dict = None):
@@ -905,28 +985,41 @@ def mutate(individual: Individual, jobs: List[Job], init_state: dict = None) -> 
     # Move a specific job next to a job with the same AMR and the same type.
     if random.random() < MUTATION_RATE:
         idx = random.randrange(size)
+        job_map = {job.idx: job for job in jobs}
         job_idx = individual.order[idx]
-        target_type = jobs[job_idx].type_
+        target_type = job_map[job_idx].type_
         target_amr = individual.amr_assignment[job_idx]
         for target_idx, other_job in enumerate(individual.order):
             if target_idx == idx: continue
-            if (individual.amr_assignment[other_job] == target_amr and jobs[other_job].type_ == target_type):
+            if (individual.amr_assignment[other_job] == target_amr and job_map[other_job].type_ == target_type):
                 individual.order.pop(idx)
-                insert_idx = target_idx if target_idx < idx else target_idx
-                individual.order.insert(insert_idx + (1 if target_idx >= idx else 0), job_idx)
+                # FIX (off-by-one): after pop, a target that was AFTER idx has shifted one
+                # place left. Insert directly after the target's NEW position.
+                new_target = target_idx - 1 if target_idx > idx else target_idx
+                individual.order.insert(new_target + 1, job_idx)
                 break
+    # Occasionally group all jobs of one (robot, type) together (replaces forced sorting).
+    if random.random() < CLUSTER_MUTATION_RATE:
+        group_same_type_mutate(individual, jobs)
     # Load Balance
     if random.random() < MUTATION_RATE:
         smart_load_balance_mutate(individual, jobs, init_state=init_state)
 
 def local_improve(individual: Individual, jobs: List[Job], max_iters: int = routing_iters, check_collision: bool = False, init_state: dict = None) -> Individual:
+    """Hill-climb from `individual`. Each iteration tries a swap involving the critical
+    (latest-finishing) robot; if that does not improve, it tries EITHER a block move or,
+    new, a relocate move that hands one of the critical robot's jobs to another robot.
+    Previously local search could only reorder jobs and never move work between robots."""
     current = Individual(order=list(individual.order), amr_assignment=list(individual.amr_assignment))
     job_count = len(current.order)
     if job_count < 2: return current
-    
+
+    def critical_of(ind: Individual) -> str:
+        availability, _, _, _, _ = decode_schedule_tick_by_tick(ind, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
+        return max(availability, key=availability.get)  # AMR that finishes last
+
     best_score, _ = fitness(current, jobs, check_collision=check_collision, init_state=init_state) # Current best fitness
-    availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
-    critical_amr = max(availability, key=availability.get) # AMR with the longest makespan
+    critical_amr = critical_of(current)
     for _ in range(max_iters):
         # Each time, randomly select two job_i and job_j and try to swap them.One of them needs to belong to the critical AMR.
         improved = False
@@ -943,24 +1036,38 @@ def local_improve(individual: Individual, jobs: List[Job], max_iters: int = rout
                 current = neighbor
                 best_score = score
                 improved = True
-                availability, _, _, _, _ = decode_schedule_tick_by_tick(current, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
-                critical_amr = max(availability, key=availability.get)
         if not improved:
-            # Find consecutive blocks with the same AMR and type in the current order.Randomly select one block.Move the entire block to another location.
-            blocks = find_adjacent_blocks(current.order, current.amr_assignment, jobs)
-            if blocks:
-                start, end = random.choice(blocks)
-                block = current.order[start:end]
-                remainder = current.order[:start] + current.order[end:]
-                insert_pos = random.randint(0, len(remainder))
-                new_order = remainder[:insert_pos] + block + remainder[insert_pos:]
-                neighbor = Individual(order=new_order, amr_assignment=list(current.amr_assignment))
+            neighbor = None
+            if random.random() < 0.5:
+                # NEW relocate move: give one of the critical robot's jobs to another robot,
+                # at a random position in the order.
+                critical_jobs = [jid for jid in current.order if current.amr_assignment[jid] == critical_amr]
+                others = [a for a in AMR_KEYS if a != critical_amr]
+                if critical_jobs and others:
+                    moved = random.choice(critical_jobs)
+                    new_assign = list(current.amr_assignment)
+                    new_assign[moved] = random.choice(others)
+                    new_order = [jid for jid in current.order if jid != moved]
+                    new_order.insert(random.randint(0, len(new_order)), moved)
+                    neighbor = Individual(order=new_order, amr_assignment=new_assign)
+            else:
+                # Find consecutive blocks with the same AMR and type in the current order.Randomly select one block.Move the entire block to another location.
+                blocks = find_adjacent_blocks(current.order, current.amr_assignment, jobs)
+                if blocks:
+                    start, end = random.choice(blocks)
+                    block = current.order[start:end]
+                    remainder = current.order[:start] + current.order[end:]
+                    insert_pos = random.randint(0, len(remainder))
+                    new_order = remainder[:insert_pos] + block + remainder[insert_pos:]
+                    neighbor = Individual(order=new_order, amr_assignment=list(current.amr_assignment))
+            if neighbor is not None:
                 score, _ = fitness(neighbor, jobs, check_collision=check_collision, init_state=init_state)
                 if score < best_score:
                     current = neighbor
                     best_score = score
                     improved = True
-        if improved: continue
+        if improved:
+            critical_amr = critical_of(current)
     return current
 
 def get_parent_via_tournament(population_scored, k=3):
@@ -1019,6 +1126,9 @@ def evolve(jobs: List[Job], init_state: dict = None) -> Tuple[Individual, List[T
     if collision_routing_iters > 0:
         archive_best = local_improve(archive_best, jobs, max_iters=collision_routing_iters, check_collision=True, init_state=init_state)
         
+    # NOTE: fitness() decodes without logging, so `timeline` is always an empty list.
+    # It is kept for backward compatibility; call describe_solution() for the timeline
+    # and Gantt chart of the final schedule.
     makespan, timeline = fitness(archive_best, jobs, check_collision=True, init_state=init_state)
     return archive_best, timeline
 
@@ -1161,19 +1271,33 @@ def station_key_from_value(raw_station: Optional[str]) -> Optional[str]:
     key = f"station{station_id}"
     return key if key in STATIONS else None
 def load_dispatch_events(path: Path = DISPATCH_INBOX) -> List[Dict[str, object]]:
+    """Load dispatch batches. Job ids are numbered 0..n-1 over the jobs that are KEPT.
+
+    FIX: ids used to be each job's position in the file, so a skipped job left a gap
+    (0, 1, 3, ...) and code that indexes amr_assignment by job id crashed. Skipped jobs
+    and unknown types are now reported instead of being dropped or changed silently.
+    """
     events = []
     if not path.exists(): return events
     lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     for idx, payload in enumerate(lines):
         try: data = json.loads(payload)
-        except: continue
+        except json.JSONDecodeError:
+            print(f"[load_dispatch_events] WARNING: line {idx + 1} is not valid JSON; batch skipped")
+            continue
         jobs = []
-        for job_idx, raw_job in enumerate(data.get("jobs", [])):
+        for file_pos, raw_job in enumerate(data.get("jobs", [])):
             station_key = station_key_from_value(raw_job.get("station"))
-            if station_key is None: continue
+            if station_key is None:
+                print(f"[load_dispatch_events] WARNING: batch {idx}, job {raw_job.get('jid', file_pos)}: "
+                      f"unknown station {raw_job.get('station')!r}; job skipped")
+                continue
             type_ = str(raw_job.get("type", "")).upper()
-            if type_ not in TYPE_DURATION: type_ = "A"
-            jobs.append(Job(idx=job_idx, type_=type_, duration=float(raw_job.get("proc_time", TYPE_DURATION[type_])), station=station_key))
+            if type_ not in TYPE_DURATION:
+                print(f"[load_dispatch_events] WARNING: batch {idx}, job {raw_job.get('jid', file_pos)}: "
+                      f"unknown type {raw_job.get('type')!r}; job skipped")
+                continue
+            jobs.append(Job(idx=len(jobs), type_=type_, duration=float(raw_job.get("proc_time", TYPE_DURATION[type_])), station=station_key))
         if jobs:
             events.append({"index": idx, "dispatch_time": float(data.get("dispatch_time", 0.0)), "jobs": jobs})
     return events

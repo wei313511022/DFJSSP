@@ -42,7 +42,7 @@ set_seed(42)
 
 
 # ======================== Files ========================
-SCHEDULE_OUTBOX = "schedule_outbox.jsonl"
+SCHEDULE_OUTBOX = "periodic_schedule_outbox.jsonl"  # separate per demo so Dynamic/Periodic don't overwrite each other
 DATASET_PATH = CONFIG['DATASET_PATH']
 AMR_STATE_FILE = "periodic_amr_state.json"
 MODEL_PATH = CONFIG['SAVE_PATH'] + '/gnn_ddqn_model_v7_ep800.pth'
@@ -54,7 +54,7 @@ FIX_PERIOD = 10.0
 open(SCHEDULE_OUTBOX, "w").close()
 
 def emit_assignment(amr_id: int, jid: int, jtype: str, proc_time: float, station: int):
-    """Append a single assigned job to schedule_outbox.jsonl (for amr_runtime)."""
+    """Append a single assigned job to periodic_schedule_outbox.jsonl (for amr_runtime)."""
     rec = {
         "generated_at": time.time(),
         "amr": int(amr_id),
@@ -499,7 +499,7 @@ def update_amr_lanes_from_sim(ax):
             draw_on_amr(ax, amr_id, qj.idx, qj.type_, qj.duration)
 
 def write_schedule_outbox():
-    """Write the current AMR queues to schedule_outbox.jsonl for amr_runtime."""
+    """Write the current AMR queues to periodic_schedule_outbox.jsonl for amr_runtime."""
     from GA.GA import AMR_KEYS
 
     # Truncate the file. amr_runtime will detect len(lines) < _lines_consumed 
