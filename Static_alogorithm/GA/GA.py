@@ -39,12 +39,13 @@ GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/static/dispatch_inbox_60.jsonl")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DISPATCH_INBOX = PROJECT_ROOT / "test_case" / "static" / "dispatch_inbox_60.jsonl"
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        
 POPULATION_SIZE = 200    # number of candidate solutions
-GENERATIONS = 150       
+GENERATIONS = 15       
 MUTATION_RATE = 0.2     
 STAGNATION_LIMIT = 40   # number of convergence iterations 
 routing_iters = 1000
@@ -1325,8 +1326,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--gantt", action="store_true", help="Plot Gantt Chart")
     parser.add_argument("--inbox", type=str, default="", help="Path to dispatch inbox JSONL file")
+    parser.add_argument("--limit", type=int, default=10, help="Process at most the first N dispatch events (default: 10)")
     parser.add_argument("--save_img", type=str, default="", help="Save the schedule Gantt chart to this file (e.g., schedule.png)")
     args = parser.parse_args()
+    if args.limit < 0:
+        parser.error("--limit must be zero or greater")
 
     random.seed(42)
     
@@ -1337,13 +1341,18 @@ if __name__ == "__main__":
         
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
     
-    output_filename = "GA_summary_results.csv"
+    output_filename = Path(__file__).resolve().parent / "GA_summary_results.csv"
     results_data = []
 
     if dispatch_events:
         if target_index is not None:
              dispatch_events = [e for e in dispatch_events if str(e["index"]) == str(target_index)]
-        
+        else:
+            dispatch_events = dispatch_events[:args.limit]
+
+        if not dispatch_events:
+            parser.error("No dispatch events selected; check DISPATCH_EVENT_INDEX or --limit")
+
         for event in dispatch_events:
             print(f"\n=== Processing Dispatch Event {event['index']} (Jobs: {len(event['jobs'])}) ===")
             start_time = time.perf_counter()
