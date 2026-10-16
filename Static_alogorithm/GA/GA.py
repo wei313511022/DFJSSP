@@ -39,12 +39,12 @@ GRID_MIN_Y = min(p[1] for p in _GRID_POINTS)
 GRID_MAX_Y = max(p[1] for p in _GRID_POINTS)
 
 SCHEDULE_OUTBOX = Path("schedule_outbox.jsonl")
-DISPATCH_INBOX = Path("../../test_case/static/dispatch_inbox_60.jsonl")
+DISPATCH_INBOX = Path(__file__).resolve().parents[2] / "test_case" / "static" / "dispatch_inbox_10.jsonl"
 DISPATCH_EVENT_INDEX_ENV = "DISPATCH_EVENT_INDEX"
 
 JOB_COUNT = 60        
 POPULATION_SIZE = 200    # number of candidate solutions
-GENERATIONS = 150       
+GENERATIONS = 20
 MUTATION_RATE = 0.2     
 STAGNATION_LIMIT = 40   # number of convergence iterations 
 routing_iters = 1000
@@ -880,12 +880,7 @@ def decode_schedule_tick_by_tick(individual: Individual, jobs: List[Job], need_l
 def fitness(individual: Individual, jobs: List[Job], check_collision: bool = False, init_state: dict = None) -> Tuple[float, List[Tuple]]:
     availability, timeline, _, _, _ = decode_schedule_tick_by_tick(individual, jobs, need_log=False, check_collision=check_collision, init_state=init_state)
     makespan = max(availability.values()) - (init_state["time"] if init_state else 0)
-    #sum of all AMR finish time offset by init_score
-    total_active_time = sum([ans - (init_state["time"] if init_state else 0) for ans in availability.values()])
-    # Fitness=Makespan + (alpha * TotalActiveTime) ,alpha=0.001
-    # Primary consider the makespan, secondary consider the total load balance 
-    weighted_score = makespan + (0.001 * total_active_time)
-    return weighted_score, timeline
+    return makespan, timeline
 
 # Random individual generation
 # Can increase diversity of initial population
@@ -1337,7 +1332,7 @@ if __name__ == "__main__":
         
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
     
-    output_filename = "GA_summary_results.csv"
+    output_filename = str(Path(__file__).resolve().parent / "GA_summary_results.csv")
     results_data = []
 
     if dispatch_events:
