@@ -1,0 +1,35 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+
+Ep   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner
+------------------------------------------------------------------------------------------------------------------------
+[AI-DECIDE] t=   3.0 step=   4 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   4.0 step=   4 GA= 530.55 ms | active=2 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  15.0 step=  16 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  16.0 step=  16 GA=  17.86 ms | active=3 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  24.0 step=  25 choose RESCHEDULE | active=2 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  25.0 step=  25 GA=  17.62 ms | active=2 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  31.0 step=  32 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  32.0 step=  32 GA=  17.66 ms | active=1 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  33.0 step=  34 choose RESCHEDULE | active=5 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  35.0 step=  34 GA=1028.75 ms | active=5 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  43.0 step=  43 choose RESCHEDULE | active=7 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  44.0 step=  43 GA= 994.32 ms | active=7 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  67.0 step=  67 choose RESCHEDULE | active=8 unstarted=5 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  69.0 step=  67 GA=1414.52 ms | active=10 unstarted=7 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 110.0 step= 109 choose RESCHEDULE | active=13 unstarted=10 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 113.0 step= 109 GA=2865.78 ms | active=13 unstarted=10 | mask_after=[1.0, 0.0]
+2    | 24.3       28.2        | 68.4    89.7     | 210.0   484.0    | 6.9       460.4     | Fix
+
+Results saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep2.png
+Episode data saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep2.csv
+
+================================================================================
+Metric               | AI Average      | Fix Average     | Diff (%)       
+--------------------------------------------------------------------------------
+Done Jobs (%)        | 24.27           | 28.16           | -13.79         
+Flow Time            | 68.38           | 89.65           | -23.73         
+Makespan             | 209.96          | 483.96          | -56.62         
+GA Time (s)          | 6.89            | 460.41          | -98.50         
+================================================================================
+Summary table saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep2_summary.csv

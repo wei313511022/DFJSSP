@@ -1,0 +1,41 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+
+Ep   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner
+------------------------------------------------------------------------------------------------------------------------
+[AI-DECIDE] t=   4.0 step=   5 choose RESCHEDULE | active=2 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   5.0 step=   5 GA= 620.10 ms | active=2 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   8.0 step=   9 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   9.0 step=   9 GA=  17.31 ms | active=3 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  16.0 step=  17 choose RESCHEDULE | active=4 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  17.0 step=  17 GA= 522.63 ms | active=4 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  22.0 step=  23 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  23.0 step=  23 GA=  17.04 ms | active=3 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  26.0 step=  27 choose RESCHEDULE | active=2 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  27.0 step=  27 GA=  16.92 ms | active=1 unstarted=1 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  27.0 step=  28 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  28.0 step=  28 GA=  16.76 ms | active=1 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  31.0 step=  32 choose RESCHEDULE | active=2 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  33.0 step=  32 GA=1228.33 ms | active=3 unstarted=3 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  42.0 step=  42 choose RESCHEDULE | active=5 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  43.0 step=  42 GA= 169.66 ms | active=5 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  46.0 step=  46 choose RESCHEDULE | active=7 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  47.0 step=  46 GA= 903.00 ms | active=8 unstarted=5 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  76.0 step=  76 choose RESCHEDULE | active=10 unstarted=8 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  79.0 step=  76 GA=2063.82 ms | active=9 unstarted=8 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 145.0 step= 143 choose RESCHEDULE | active=14 unstarted=13 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 149.0 step= 143 GA=3974.36 ms | active=13 unstarted=13 | mask_after=[1.0, 1.0]
+6    | 33.7       37.3        | 72.3    90.5     | 246.5   455.5    | 9.5       334.4     | Fix
+
+Results saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep6.png
+Episode data saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep6.csv
+
+================================================================================
+Metric               | AI Average      | Fix Average     | Diff (%)       
+--------------------------------------------------------------------------------
+Done Jobs (%)        | 33.73           | 37.35           | -9.68          
+Flow Time            | 72.34           | 90.55           | -20.11         
+Makespan             | 246.50          | 455.50          | -45.88         
+GA Time (s)          | 9.55            | 334.36          | -97.14         
+================================================================================
+Summary table saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep6_summary.csv

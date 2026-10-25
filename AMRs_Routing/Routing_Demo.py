@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 
 # ---------- Files ----------
-AMR_STATE_FILE = "../Random_Job_Arrivals/models/dynamic_amr_state.json"
+AMR_STATE_FILE = "../Random_Job_Arrivals/GNN_models/dynamic_amr_state.json"
 
 # ---------- Grid / Layout ----------
 GRID_W, GRID_H = 10, 11
@@ -216,7 +216,7 @@ def apply_state(amrs: Dict[int, AMRVisual], state: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="AMR Routing Demo")
-    parser.add_argument("--state_file", type=str, default="../Random_Job_Arrivals/models/dynamic_amr_state.json", help="Path to amr_state.json")
+    parser.add_argument("--state_file", type=str, default="../Random_Job_Arrivals/GNN_models/dynamic_amr_state.json", help="Path to amr_state.json")
     parser.add_argument("--window_pos", type=str, default=None, help="Window geometry e.g., +100+100")
     parser.add_argument("--title", type=str, default="Route Map", help="Title of the window and plot")
     parser.add_argument("--sync_file", type=str, default=None)

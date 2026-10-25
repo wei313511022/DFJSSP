@@ -1,0 +1,29 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+
+Ep   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner
+------------------------------------------------------------------------------------------------------------------------
+[AI-DECIDE] t=   2.0 step=   3 choose RESCHEDULE | active=2 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   4.0 step=   3 GA=1224.79 ms | active=4 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   5.0 step=   5 choose RESCHEDULE | active=6 unstarted=3 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   6.0 step=   5 GA= 655.64 ms | active=6 unstarted=3 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   9.0 step=   9 choose RESCHEDULE | active=7 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  11.0 step=   9 GA=1869.28 ms | active=10 unstarted=7 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  12.0 step=  11 choose RESCHEDULE | active=12 unstarted=9 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  15.0 step=  11 GA=2828.31 ms | active=12 unstarted=9 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  61.0 step=  58 choose RESCHEDULE | active=14 unstarted=11 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  65.0 step=  58 GA=3631.21 ms | active=14 unstarted=11 | mask_after=[1.0, 0.0]
+4    | 21.0       30.0        | 75.6    91.5     | 170.6   428.6    | 10.2      431.7     | Fix
+
+Results saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep4.png
+Episode data saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep4.csv
+
+================================================================================
+Metric               | AI Average      | Fix Average     | Diff (%)       
+--------------------------------------------------------------------------------
+Done Jobs (%)        | 21.00           | 30.00           | -30.00         
+Flow Time            | 75.57           | 91.45           | -17.37         
+Makespan             | 170.57          | 428.57          | -60.20         
+GA Time (s)          | 10.21           | 431.71          | -97.64         
+================================================================================
+Summary table saved to ../models_pth/taguchi_ddqn_eval_r4/demo_ep4_summary.csv

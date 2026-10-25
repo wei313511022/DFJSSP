@@ -1,7 +1,7 @@
 """
 Train the static scheduling GNN (SchedulerGNN) against the GA.py simulator.
 
-Method (same network, features and schedule-building rule as GNN.py):
+Method (the network and schedule-building rule are GNN.py's own build_schedules):
   * REINFORCE with a shared baseline: each step samples B schedules for ONE instance
     in a single batched forward pass; advantage = (mean makespan - own makespan) / std.
   * Reward = makespan of the RAW GNN schedule in the real tick-by-tick simulator
@@ -14,8 +14,8 @@ steps, used a per-instance moving-average baseline, saved on the noisy training
 average, and needed ~15 s per epoch on a CPU (10,000 epochs ~ 40 h).
 
 Usage (from Static_alogorithm/GNN):
-  python train.py --minutes 60 --out gnn_scheduler_retrained.pth
-  python train.py --minutes 30 --init gnn_scheduler_retrained.pth   # continue training
+  python train.py --minutes 60                                     # -> gnn_scheduler_extend.pth
+  python train.py --minutes 30 --init gnn_scheduler_extend.pth     # continue training
 """
 import argparse
 import csv
@@ -23,77 +23,11 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import List
-
 import torch
-import torch.nn.functional as F
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from GNN import SchedulerGNN, extract_state  # noqa: E402
-from GA.GA import (  # noqa: E402
-    AMR_KEYS, AMR_STARTS, STATIONS, SUPPLY_LOCATIONS, TYPE_DURATION, Individual,
-    decode_schedule_tick_by_tick, heuristic, load_dispatch_events,
-)
-
-
-def solve_batch(job_lists: List[list], model: SchedulerGNN, deterministic: bool):
-    """Build one schedule per entry of `job_lists` in a single batched pass.
-
-    Identical decision rule and internal state update to GNN.solve_with_gnn (no
-    init_state); all instances must have the same number of jobs.
-    Returns (individuals, log_prob tensor of shape [B]).
-    """
-    B = len(job_lists)
-    n = len(job_lists[0])
-    device = next(model.parameters()).device
-    pos = [{a: AMR_STARTS[a] for a in AMR_KEYS} for _ in range(B)]
-    avail = [{a: 0.0 for a in AMR_KEYS} for _ in range(B)]
-    st_avail = [{s: 0.0 for s in STATIONS} for _ in range(B)]
-    inv = []
-    for _ in range(B):
-        d = {a: {m: 0 for m in TYPE_DURATION} for a in AMR_KEYS}
-        d["AMR1"]["A"] = 3; d["AMR2"]["B"] = 3; d["AMR3"]["C"] = 3
-        inv.append(d)
-    assigned = [set() for _ in range(B)]
-    orders = [[] for _ in range(B)]
-    assign = [dict() for _ in range(B)]
-    log_prob = torch.zeros(B, device=device)
-
-    model.eval() if deterministic else model.train()
-    for _ in range(n):
-        feats = [extract_state(job_lists[b], assigned[b], pos[b], avail[b], inv[b]) for b in range(B)]
-        amr_f = torch.cat([f[0] for f in feats]).to(device)
-        job_f = torch.cat([f[1] for f in feats]).to(device)
-        mask = torch.cat([f[2] for f in feats]).to(device)
-        logits = model(amr_f, job_f, mask).reshape(B, -1)
-        if deterministic:
-            actions = logits.argmax(dim=1)
-        else:
-            lp = F.log_softmax(logits, dim=1)
-            actions = torch.distributions.Categorical(logits=lp).sample()
-            log_prob = log_prob + lp.gather(1, actions.unsqueeze(1)).squeeze(1)
-        for b, act in enumerate(actions.tolist()):
-            amr = AMR_KEYS[act // n]
-            job = job_lists[b][act % n]
-            orders[b].append(job.idx)
-            assign[b][job.idx] = amr
-            assigned[b].add(job.idx)
-            # same fast approximation as solve_with_gnn
-            t = avail[b][amr]; p = pos[b][amr]
-            if inv[b][amr][job.type_] == 0:
-                sup = SUPPLY_LOCATIONS[job.type_]
-                t += heuristic(p, sup); p = sup
-                inv[b][amr][job.type_] = 3
-            target = STATIONS[job.station]
-            t += heuristic(p, target)
-            t = max(t, st_avail[b][job.station])
-            t += job.duration
-            inv[b][amr][job.type_] -= 1
-            st_avail[b][job.station] = t
-            avail[b][amr] = t
-            pos[b][amr] = target
-    inds = [Individual(order=orders[b], amr_assignment=[assign[b][i] for i in range(n)]) for b in range(B)]
-    return inds, log_prob
+from GNN import DEFAULT_WEIGHTS, GNN_NUM_THREADS, SchedulerGNN, build_schedules  # noqa: E402
+from GA.GA import decode_schedule_tick_by_tick, load_dispatch_events  # noqa: E402
 
 
 def real_makespan(ind, jobs) -> float:
@@ -102,7 +36,7 @@ def real_makespan(ind, jobs) -> float:
 
 def evaluate(model, events) -> float:
     with torch.no_grad():
-        inds, _ = solve_batch([e["jobs"] for e in events], model, deterministic=True)
+        inds, _ = build_schedules([e["jobs"] for e in events], model, deterministic=True)
     return sum(real_makespan(i, e["jobs"]) for i, e in zip(inds, events)) / len(events)
 
 
@@ -114,17 +48,18 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--val_every", type=int, default=25)
     ap.add_argument("--init", default="", help="optional weights to start from")
-    ap.add_argument("--out", default="gnn_scheduler_retrained.pth")
+    ap.add_argument("--out", default=DEFAULT_WEIGHTS.name)
     ap.add_argument("--log", default="train_log.csv")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     random.seed(args.seed); torch.manual_seed(args.seed)
+    torch.set_num_threads(GNN_NUM_THREADS)  # tiny tensors: more threads only add overhead
     events = load_dispatch_events(Path(args.inbox))
     train, val = events[:900], events[900:950]
     print(f"train {len(train)}  val {len(val)}  (test = lines 950-999, not used here)")
 
-    model = SchedulerGNN(amr_in_dim=8, job_in_dim=10, hidden_dim=128, gnn_layers=2)
+    model = SchedulerGNN()
     if args.init:
         model.load_state_dict(torch.load(args.init, map_location="cpu"))
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -140,7 +75,7 @@ def main():
     while (time.time() - start) / 60 < args.minutes:
         epoch += 1
         ev = random.choice(train)
-        inds, logp = solve_batch([ev["jobs"]] * args.batch, model, deterministic=False)
+        inds, logp = build_schedules([ev["jobs"]] * args.batch, model, deterministic=False)
         ms = torch.tensor([real_makespan(i, ev["jobs"]) for i in inds])
         adv = (ms.mean() - ms) / (ms.std() + 1e-6)
         loss = -(adv * logp).mean()

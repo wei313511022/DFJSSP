@@ -7,10 +7,10 @@ from collections import deque
 import heapq
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch, Rectangle
-from functools import lru_cache 
+from functools import lru_cache
 
 import torch
 import torch.nn as nn
@@ -28,7 +28,8 @@ from GA.GA import (
     _is_within_bounds, _DELTAS, _adjacent_points, _build_path, _manhattan_path,
     heuristic, shortest_path, find_dynamic_path, _extend_path_log, grid_distance,
     nearest_base_to_station, _diagnose_and_print_failure, decode_schedule, decode_schedule_tick_by_tick, fitness, local_improve,
-    plot_gantt, station_key_from_value, load_dispatch_events, make_jobs
+    plot_gantt, station_key_from_value, load_dispatch_events, make_jobs,
+    _earliest_fit, _book,
 )
 
 # Overwrite describe_solution locally to pass save_img
@@ -42,340 +43,420 @@ def describe_solution_gnn(individual: Individual, jobs: List[Job], solve_time: f
     if show_gantt or save_img:
         # Generate plot
         plot_gantt(decoded_timeline, queue_infos, jobs, solve_time=solve_time, invalid_count=invalid_count, show_gantt=show_gantt, save_img=save_img)
-            
+
     return makespan, solve_time
 
-# ===== GNN Architecture =====
-class SchedulerGNN(nn.Module):
-    def __init__(self, amr_in_dim=8, job_in_dim=10, hidden_dim=128, gnn_layers=2):
+# ==========================================
+# Graph layout (architecture follows AMR-DFJSP extend_GNN, adapted to one
+# operation per job: assign job -> AMR; refills happen implicitly in the decoder)
+# ==========================================
+AMR_IN_DIM = 11
+JOB_IN_DIM = 11
+DOCK_IN_DIM = 8
+ACTION_IN_DIM = 4
+DISTANCE_SCALE = 20.0
+TIME_SCALE = 100.0
+WORKLOAD_SCALE = 500.0
+REFILL_AMOUNT = 3  # decode_schedule refills an empty material to 3
+# The tensors here are tiny; with the default 24 CPU threads every op pays thread-sync
+# overhead (60-job build: ~3 s with 24 threads vs 0.08 s with 1-4 threads).
+GNN_NUM_THREADS = 4
+
+MATERIALS = list(TYPE_DURATION.keys())
+STATION_KEYS = list(STATIONS.keys())
+SUPPLY_KEYS = [f"supply_{m}" for m in MATERIALS]
+# "Dock" nodes = service points: the stations plus one supply point per material.
+DOCK_KEYS = STATION_KEYS + SUPPLY_KEYS
+DOCK_INDEX = {k: i for i, k in enumerate(DOCK_KEYS)}
+DOCK_POSITIONS = {**STATIONS, **{f"supply_{m}": SUPPLY_LOCATIONS[m] for m in MATERIALS}}
+
+# Weights for this architecture. Checkpoints of the old attention-only
+# SchedulerGNN (gnn_scheduler_best.pth / gnn_scheduler_retrained.pth) do not fit it.
+DEFAULT_WEIGHTS = Path(__file__).resolve().parent / "gnn_scheduler_extend.pth"
+
+
+def travel_time(a: Tuple[int, int], b: Tuple[int, int]) -> int:
+    """Grid travel time, the same A* path length decode_schedule uses."""
+    return len(shortest_path(a, b)) - 1
+
+
+def load_gnn_weights(model: nn.Module, path=DEFAULT_WEIGHTS, map_location='cpu') -> bool:
+    """Load weights into `model`; warn and keep it untrained if missing or incompatible."""
+    path = Path(path)
+    if not path.exists():
+        print(f"WARNING: GNN weights {path} not found; using an untrained SchedulerGNN.")
+        return False
+    try:
+        model.load_state_dict(torch.load(path, map_location=map_location))
+    except RuntimeError:
+        print(f"WARNING: {path} does not match the current SchedulerGNN architecture "
+              f"(old checkpoint?); using an untrained SchedulerGNN.")
+        return False
+    return True
+
+
+# ==========================================
+# Construction state (fast model == decode_schedule without collisions)
+# ==========================================
+class ConstructionState:
+    """Partial schedule while the GNN assigns jobs one at a time.
+
+    Times follow decode_schedule exactly (A* travel, refill to 3 at the supply point when
+    the material is empty, station booking calendars with _earliest_fit), so the prefix
+    the GNN sees is what the non-collision decoder would produce for it.
+    """
+
+    def __init__(self, jobs: Sequence[Job], init_state: dict = None):
+        self.jobs = list(jobs)
+        self.n = len(self.jobs)
+        if init_state:
+            self.t0 = float(init_state.get("time", 0.0))
+            self.avail = {a: float(init_state["availability"].get(a, 0.0)) for a in AMR_KEYS}
+            self.pos = {a: tuple(init_state["positions"].get(a, AMR_STARTS[a])) for a in AMR_KEYS}
+            self.inv = {a: dict(init_state["inventory"].get(a, {m: 0 for m in MATERIALS})) for a in AMR_KEYS}
+        else:
+            self.t0 = 0.0
+            self.avail = {a: 0.0 for a in AMR_KEYS}
+            self.pos = {a: AMR_STARTS[a] for a in AMR_KEYS}
+            self.inv = {a: {m: 0 for m in MATERIALS} for a in AMR_KEYS}
+            if "AMR1" in self.inv: self.inv["AMR1"]["A"] = 3
+            if "AMR2" in self.inv: self.inv["AMR2"]["B"] = 3
+            if "AMR3" in self.inv: self.inv["AMR3"]["C"] = 3
+        self.calendar = {s: [] for s in STATION_KEYS}
+        self.assigned = [False] * self.n
+        self.carrier = [None] * self.n          # AMR index per job position
+        self.order: List[int] = []
+        self.assignment: Dict[int, str] = {}
+        self.amr_load = {a: 0.0 for a in AMR_KEYS}
+        self.amr_count = {a: 0 for a in AMR_KEYS}
+        self.last_on_amr: Dict[str, int] = {}
+        self.last_on_station: Dict[str, int] = {}
+        self.adj = torch.zeros(self.n, self.n)
+        self.station_idx = torch.tensor([DOCK_INDEX[j.station] for j in self.jobs], dtype=torch.long)
+        self.supply_idx = torch.tensor([DOCK_INDEX[f"supply_{j.type_}"] for j in self.jobs], dtype=torch.long)
+
+    def done(self) -> bool:
+        return len(self.order) == self.n
+
+    def outcome(self, amr: str, k: int):
+        """(needs_refill, travel, station_wait, end_time) if job position k went to `amr` next."""
+        job = self.jobs[k]
+        p, travel = self.pos[amr], 0
+        refill = self.inv[amr][job.type_] == 0
+        if refill:
+            travel += travel_time(p, SUPPLY_LOCATIONS[job.type_])
+            p = SUPPLY_LOCATIONS[job.type_]
+        travel += travel_time(p, STATIONS[job.station])
+        arrive = self.avail[amr] + travel
+        start = _earliest_fit(self.calendar[job.station], arrive, job.duration)
+        return refill, travel, start - arrive, start + job.duration
+
+    def apply(self, amr_idx: int, k: int) -> None:
+        amr, job = AMR_KEYS[amr_idx], self.jobs[k]
+        refill, _, _, end = self.outcome(amr, k)
+        if refill:
+            self.inv[amr][job.type_] = REFILL_AMOUNT
+        self.inv[amr][job.type_] -= 1
+        _book(self.calendar[job.station], end - job.duration, end)
+        self.avail[amr] = end
+        self.pos[amr] = STATIONS[job.station]
+        self.assigned[k] = True
+        self.carrier[k] = amr_idx
+        self.order.append(job.idx)
+        self.assignment[job.idx] = amr
+        self.amr_load[amr] += job.duration
+        self.amr_count[amr] += 1
+        # Sequence arcs only (consecutive jobs on the same AMR / same station), as in
+        # extend_GNN: dense shared-dock cliques collapse job embeddings.
+        for prev in (self.last_on_amr.get(amr), self.last_on_station.get(job.station)):
+            if prev is not None and prev != k:
+                self.adj[prev, k] = 1.0
+                self.adj[k, prev] = 1.0
+        self.last_on_amr[amr] = k
+        self.last_on_station[job.station] = k
+
+    def to_individual(self) -> Individual:
+        # amr_assignment is indexed by job id; jobs use ids 0..N-1
+        return Individual(order=list(self.order), amr_assignment=[self.assignment[i] for i in range(self.n)])
+
+    def features(self):
+        t_now = min(self.avail.values())
+        n, A = self.n, len(AMR_KEYS)
+
+        # Action edges: what each (AMR, job) assignment would cost right now
+        action = torch.zeros(A, n, ACTION_IN_DIM)
+        best_end = [0.0] * n
+        for k in range(n):
+            if self.assigned[k]:
+                continue
+            ends = []
+            for a_idx, amr in enumerate(AMR_KEYS):
+                refill, travel, wait, end = self.outcome(amr, k)
+                action[a_idx, k] = torch.tensor([
+                    1.0 if refill else 0.0,
+                    travel / DISTANCE_SCALE,
+                    wait / TIME_SCALE,
+                    (end - t_now) / TIME_SCALE,
+                ])
+                ends.append(end)
+            best_end[k] = min(ends)
+
+        amr_feat = []
+        for amr in AMR_KEYS:
+            p, av, inv = self.pos[amr], self.avail[amr], self.inv[amr]
+            density = sum(1 for o in AMR_KEYS if o != amr and heuristic(p, self.pos[o]) <= 2) / max(A - 1, 1)
+            amr_feat.append([
+                1.0 if av > t_now else 0.0,
+                (av - t_now) / TIME_SCALE,
+                inv.get("A", 0) / REFILL_AMOUNT,
+                inv.get("B", 0) / REFILL_AMOUNT,
+                inv.get("C", 0) / REFILL_AMOUNT,
+                self.amr_count[amr] / max(n, 1),
+                self.amr_load[amr] / WORKLOAD_SCALE,
+                min(heuristic(p, DOCK_POSITIONS[d]) for d in DOCK_KEYS) / DISTANCE_SCALE,
+                density,
+                p[0] / max(GRID_MAX_X, 1),
+                p[1] / max(GRID_MAX_Y, 1),
+            ])
+
+        unassigned = [k for k in range(n) if not self.assigned[k]]
+        dock_feat = []
+        for d in DOCK_KEYS:
+            dp = DOCK_POSITIONS[d]
+            if d in STATIONS:
+                live = [(s, e) for s, e in self.calendar[d] if e > t_now]
+                demand = sum(self.jobs[k].duration for k in unassigned if self.jobs[k].station == d) / WORKLOAD_SCALE
+                free_in = max((e for _, e in live), default=t_now) - t_now
+                dock_feat.append([
+                    1.0, 0.0,
+                    free_in / TIME_SCALE,
+                    len(live) / A,
+                    sum(e - max(s, t_now) for s, e in live) / WORKLOAD_SCALE,
+                    demand,
+                    dp[0] / max(GRID_MAX_X, 1),
+                    dp[1] / max(GRID_MAX_Y, 1),
+                ])
+            else:
+                mat = d[len("supply_"):]
+                dock_feat.append([
+                    0.0, 1.0, 0.0, 0.0, 0.0,
+                    sum(1 for k in unassigned if self.jobs[k].type_ == mat) / max(n, 1),
+                    dp[0] / max(GRID_MAX_X, 1),
+                    dp[1] / max(GRID_MAX_Y, 1),
+                ])
+
+        job_feat = []
+        for k, job in enumerate(self.jobs):
+            sp = STATIONS[job.station]
+            job_feat.append([
+                1.0,
+                job.duration / 25.0,
+                1.0 if job.type_ == "A" else 0.0,
+                1.0 if job.type_ == "B" else 0.0,
+                1.0 if job.type_ == "C" else 0.0,
+                1.0 if self.assigned[k] else 0.0,
+                (self.carrier[k] + 1) / A if self.carrier[k] is not None else 0.0,
+                (STATION_KEYS.index(job.station) + 1) / len(STATION_KEYS),
+                0.0 if self.assigned[k] else (best_end[k] - t_now) / TIME_SCALE,
+                sp[0] / max(GRID_MAX_X, 1),
+                sp[1] / max(GRID_MAX_Y, 1),
+            ])
+
+        assigned = torch.tensor(self.assigned, dtype=torch.bool)
+        return {
+            "amr": torch.tensor(amr_feat, dtype=torch.float32),
+            "job": torch.tensor(job_feat, dtype=torch.float32),
+            "dock": torch.tensor(dock_feat, dtype=torch.float32),
+            "action": action,
+            "actor_mask": assigned.unsqueeze(0).expand(A, n).clone(),  # True = illegal
+            "job_mask": assigned,
+            "adj": self.adj.clone(),
+            "station_idx": self.station_idx,
+            "supply_idx": self.supply_idx,
+        }
+
+
+def stack_features(feats: List[dict], device) -> dict:
+    return {k: torch.stack([f[k] for f in feats]).to(device) for k in feats[0]}
+
+
+# ==========================================
+# GNN Architecture (extend_GNN style)
+# ==========================================
+class GINConv(nn.Module):
+    def __init__(self, hidden_dim: int, eps_init: float = 0.0):
         super().__init__()
-        self.amr_emb = nn.Linear(amr_in_dim, hidden_dim)
-        self.job_emb = nn.Linear(job_in_dim, hidden_dim)
-
-        self.gnn_layers = gnn_layers
-        # Simplified interaction using multihead attention where AMRs and Jobs attend to each other
-        self.attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=4, batch_first=True)
-            for _ in range(gnn_layers)
-        ])
-        
-        self.fc_layers = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim * 2, hidden_dim)
-            ) for _ in range(gnn_layers)
-        ])
-
-        # Policy Head: Takes concatenated (AMR, Job) embeddings and outputs logit
-        self.policy_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+        self.eps = nn.Parameter(torch.tensor(eps_init))
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim * 2, hidden_dim),
         )
+        self.norm = nn.LayerNorm(hidden_dim)
 
-    def forward(self, amr_features, job_features, job_mask):
-        """
-        amr_features: (batch, num_amrs, amr_in_dim)
-        job_features: (batch, num_jobs, job_in_dim)
-        job_mask: (batch, num_jobs) - True if job is ALREADY ASSIGNED (should be ignored)
-        
-        Returns logits for each valid (amr, job) pair
-        Output shape: (batch, num_amrs, num_jobs)
-        """
-        # 1. Embeddings
-        x_amr = self.amr_emb(amr_features) # (batch, num_amrs, hidden)
-        x_job = self.job_emb(job_features) # (batch, num_jobs, hidden)
-
-        # 2. Message Passing (treat as bipartite graph interaction)
-        # AMRs and Jobs exchange information. We concatenate them into a single graph node list for global attention.
-        num_amrs = x_amr.size(1)
-        num_jobs = x_job.size(1)
-        
-        # Combine nodes for self-attention across the whole statespace
-        # x_nodes: (batch, num_amrs + num_jobs, hidden)
-        x_nodes = torch.cat([x_amr, x_job], dim=1)
-        
-        # Create a padding mask for self attention to prevent attention to assigned jobs
-        # Attention mask: True means DO NOT attend.
-        # amr nodes are never masked (False). jobs are masked if job_mask is True.
-        batch_size = x_nodes.size(0)
-        amr_mask = torch.zeros((batch_size, num_amrs), dtype=torch.bool, device=x_nodes.device)
-        attn_key_padding_mask = torch.cat([amr_mask, job_mask], dim=1) # (batch, num_amrs + num_jobs)
-        
-        # If all jobs are masked (which shouldn't happen during active stepping, but just in case), 
-        # prevent NaN in attention by unmasking everything temporarily
-        if attn_key_padding_mask.all():
-            attn_key_padding_mask = None
-
-        for attn, fc in zip(self.attn_layers, self.fc_layers):
-            # Self-attention over all valid AMRs and Jobs
-            x_nodes_attn, _ = attn(x_nodes, x_nodes, x_nodes, key_padding_mask=attn_key_padding_mask)
-            x_nodes = x_nodes + x_nodes_attn
-            x_nodes = x_nodes + fc(x_nodes)
-            
-        # Split back
-        x_amr = x_nodes[:, :num_amrs, :]
-        x_job = x_nodes[:, num_amrs:, :]
-
-        # 3. Policy Head (Pairwise comparisons)
-        # We need an output for every combination of AMR and Job
-        # x_amr_expand: (batch, num_amrs, num_jobs, hidden)
-        x_amr_expand = x_amr.unsqueeze(2).expand(-1, -1, num_jobs, -1)
-        # x_job_expand: (batch, num_amrs, num_jobs, hidden)
-        x_job_expand = x_job.unsqueeze(1).expand(-1, num_amrs, -1, -1)
-        
-        # pairs: (batch, num_amrs, num_jobs, hidden * 2)
-        pairs = torch.cat([x_amr_expand, x_job_expand], dim=-1)
-        
-        # logits: (batch, num_amrs, num_jobs)
-        logits = self.policy_head(pairs).squeeze(-1)
-        
-        # Mask out assigned jobs by setting their logits to -inf
-        # job_mask_expand: (batch, 1, num_jobs)
-        job_mask_expand = job_mask.unsqueeze(1)
-        logits = logits.masked_fill(job_mask_expand, float('-inf'))
-        
-        return logits
+    def forward(self, x, adj):
+        # Mean aggregation keeps message scale stable as the sequence-arc graph grows.
+        degree = adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
+        agg = torch.bmm(adj, x) / degree
+        return self.norm(self.mlp((1.0 + self.eps) * x + agg))
 
 
-def extract_state(jobs, assigned_jobs_set, amr_positions, amr_availabilities, amr_inventory):
+class SchedulerGNN(nn.Module):
+    """AMR / job / service-point graph scorer for (AMR, job) assignments.
+
+    1. AMR and dock (station + supply point) embeddings, one pre-LN residual attention
+       round between them (zero-initialised so it starts as identity).
+    2. Jobs fuse their station and supply-point embeddings residually, then pass through
+       GIN layers over the sequence-arc job graph.
+    3. Actor scores every (AMR, job) pair from [AMR, job, station, supply, action edge].
+    The critic head is only used by actor-critic training.
     """
-    Constructs the tensor inputs for the GNN.
-    Returns amr_features, job_features, job_mask defined as:
-    
-    AMR Features (8):
-     0: x / max_x
-     1: y / max_y
-     2: available_time (normalized roughly to max plausible time, eg 1000)
-     3: inventory A
-     4: inventory B
-     5: inventory C
-     6: idle flag (1 if available_time is min among AMRs)
-     7: identity proxy (integer id for AMR / 3.0)
-     
-    Job Features (10):
-     0: x / max_x (station location)
-     1: y / max_y
-     2: duration / 30.0
-     3: type A flag (1 or 0)
-     4: type B flag (1 or 0)
-     5: type C flag (1 or 0)
-     6: identity index / limit
-     7: 0.0 (placeholder for future metrics)
-     8: 0.0
-     9: 0.0
-     
-    Job Mask: boolean array of size len(jobs), True if job inside assigned_jobs
-    """
-    
-    # AMR Features
-    amr_feat = []
-    min_avail = min(amr_availabilities.values())
-    
-    for idx, amr in enumerate(AMR_KEYS):
-        pos = amr_positions[amr]
-        avail = amr_availabilities[amr]
-        inv = amr_inventory[amr]
-        
-        feat = [
-            pos[0] / max(GRID_MAX_X, 1),
-            pos[1] / max(GRID_MAX_Y, 1),
-            avail / 1000.0,
-            inv.get("A", 0) / 3.0,
-            inv.get("B", 0) / 3.0,
-            inv.get("C", 0) / 3.0,
-            1.0 if avail == min_avail else 0.0,
-            idx / len(AMR_KEYS)
-        ]
-        amr_feat.append(feat)
-        
-    # Job Features
-    job_feat = []
-    job_mask = []
-    for job in jobs:
-        pos = STATIONS[job.station]
-        
-        feat = [
-            pos[0] / max(GRID_MAX_X, 1),
-            pos[1] / max(GRID_MAX_Y, 1),
-            job.duration / 30.0,
-            1.0 if job.type_ == "A" else 0.0,
-            1.0 if job.type_ == "B" else 0.0,
-            1.0 if job.type_ == "C" else 0.0,
-            job.idx / JOB_COUNT,
-            0.0, 0.0, 0.0
-        ]
-        job_feat.append(feat)
-        job_mask.append(job.idx in assigned_jobs_set)
-        
-    return (
-        torch.tensor([amr_feat], dtype=torch.float32), 
-        torch.tensor([job_feat], dtype=torch.float32),
-        torch.tensor([job_mask], dtype=torch.bool)
-    )
+
+    def __init__(self, amr_in_dim=AMR_IN_DIM, job_in_dim=JOB_IN_DIM, dock_in_dim=DOCK_IN_DIM,
+                 action_in_dim=ACTION_IN_DIM, hidden_dim=128, gin_layers=3):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.amr_emb = nn.Sequential(nn.Linear(amr_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim))
+        self.job_emb = nn.Linear(job_in_dim, hidden_dim)
+        self.dock_emb = nn.Sequential(nn.Linear(dock_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim))
+        self.job_dock_fusion = nn.Sequential(nn.Linear(hidden_dim * 3, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim))
+
+        self.dock_from_amr_attn = nn.MultiheadAttention(hidden_dim, num_heads=4, batch_first=True)
+        self.dock_from_amr_norm_q = nn.LayerNorm(hidden_dim)
+        self.dock_from_amr_norm_kv = nn.LayerNorm(hidden_dim)
+        self.amr_self_attn = nn.MultiheadAttention(hidden_dim, num_heads=4, batch_first=True)
+        self.amr_self_norm = nn.LayerNorm(hidden_dim)
+        self.amr_from_dock_attn = nn.MultiheadAttention(hidden_dim, num_heads=4, batch_first=True)
+        self.amr_from_dock_norm_q = nn.LayerNorm(hidden_dim)
+        self.amr_from_dock_norm_kv = nn.LayerNorm(hidden_dim)
+        for attn in (self.dock_from_amr_attn, self.amr_self_attn, self.amr_from_dock_attn):
+            nn.init.zeros_(attn.out_proj.weight)
+            nn.init.zeros_(attn.out_proj.bias)
+
+        self.gin_layers = nn.ModuleList([GINConv(hidden_dim) for _ in range(gin_layers)])
+        self.actor = nn.Sequential(nn.Linear(hidden_dim * 4 + action_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.critic = nn.Sequential(nn.Linear(hidden_dim * 3, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+
+    @staticmethod
+    def _gather(dock_emb, idx):
+        return torch.gather(dock_emb, 1, idx.unsqueeze(-1).expand(-1, -1, dock_emb.size(-1)))
+
+    def encode(self, f):
+        amr = self.amr_emb(f["amr"])
+        dock = self.dock_emb(f["dock"])
+
+        q, kv = self.dock_from_amr_norm_q(dock), self.dock_from_amr_norm_kv(amr)
+        dock = dock + self.dock_from_amr_attn(q, kv, kv)[0]
+        q = self.amr_self_norm(amr)
+        amr = amr + self.amr_self_attn(q, q, q)[0]
+        q, kv = self.amr_from_dock_norm_q(amr), self.amr_from_dock_norm_kv(dock)
+        amr = amr + self.amr_from_dock_attn(q, kv, kv)[0]
+
+        job_base = self.job_emb(f["job"])
+        station = self._gather(dock, f["station_idx"])
+        supply = self._gather(dock, f["supply_idx"])
+        job = job_base + self.job_dock_fusion(torch.cat([job_base, station, supply], dim=-1))
+        for gin in self.gin_layers:
+            job = job + gin(job, f["adj"])
+        return amr, job, dock, station, supply
+
+    def forward(self, f):
+        """f: dict from stack_features. Returns logits (batch, num_amrs, num_jobs), illegal = -inf."""
+        amr, job, _, station, supply = self.encode(f)
+        A, N = amr.size(1), job.size(1)
+        pairs = torch.cat([
+            amr.unsqueeze(2).expand(-1, -1, N, -1),
+            job.unsqueeze(1).expand(-1, A, -1, -1),
+            station.unsqueeze(1).expand(-1, A, -1, -1),
+            supply.unsqueeze(1).expand(-1, A, -1, -1),
+            f["action"],
+        ], dim=-1)
+        logits = self.actor(pairs).squeeze(-1)
+        return logits.masked_fill(f["actor_mask"], float('-inf'))
+
+    def forward_critic(self, f):
+        amr, job, dock, _, _ = self.encode(f)
+        keep = (~f["job_mask"]).float().unsqueeze(-1)
+        job_pool = (job * keep).sum(dim=1) / keep.sum(dim=1).clamp(min=1.0)
+        return self.critic(torch.cat([job_pool, amr.mean(dim=1), dock.mean(dim=1)], dim=-1)).squeeze(-1)
+
 
 # ===== GNN Scheduling Heuristic Loop =====
+def build_schedules(job_lists: List[Sequence[Job]], model: SchedulerGNN, deterministic: bool,
+                    init_states: Optional[List[dict]] = None):
+    """Build one schedule per entry of `job_lists` in a single batched pass.
+
+    All instances must have the same number of jobs. Returns (individuals, log_prob [B]).
+    """
+    device = next(model.parameters()).device
+    states = [ConstructionState(jobs, init_states[b] if init_states else None) for b, jobs in enumerate(job_lists)]
+    B, n = len(states), states[0].n
+    log_prob = torch.zeros(B, device=device)
+    model.eval() if deterministic else model.train()
+    prev_threads = torch.get_num_threads()
+    if prev_threads > GNN_NUM_THREADS:
+        torch.set_num_threads(GNN_NUM_THREADS)
+    try:
+        for _ in range(n):
+            logits = model(stack_features([s.features() for s in states], device)).reshape(B, -1)
+            if deterministic:
+                actions = logits.argmax(dim=1)
+            else:
+                lp = F.log_softmax(logits, dim=1)
+                actions = torch.distributions.Categorical(logits=lp).sample()
+                log_prob = log_prob + lp.gather(1, actions.unsqueeze(1)).squeeze(1)
+            for s, act in zip(states, actions.tolist()):
+                s.apply(act // n, act % n)
+    finally:
+        torch.set_num_threads(prev_threads)
+    return [s.to_individual() for s in states], log_prob
+
+
 def solve_with_gnn(jobs, model, deterministic=True, init_state: dict = None):
     """
     Uses the GNN to autoregressively build a schedule.
     Returns: The final Individual, the total log probabilities of the sequence, and the total execution time of the building process.
     """
     start_time = time.perf_counter()
-    
-    # Internal Simulator State (Tracking rough time/inventory during sequence building)
-    # We use Manhattan distance here for speed. The exact simulation happens later in `decode_schedule`.
-    if init_state:
-        amr_positions = {amr: init_state["positions"].get(amr, AMR_STARTS[amr]) for amr in AMR_KEYS}
-        amr_availabilities = {amr: float(init_state["availability"].get(amr, 0.0)) for amr in AMR_KEYS}
-        station_availabilities = {s: float(init_state["time"]) for s in STATIONS.keys()}
-        amr_inventory = {amr: init_state["inventory"].get(amr, {mat: 0 for mat in TYPE_DURATION.keys()}).copy() for amr in AMR_KEYS}
-    else:
-        amr_positions = {amr: AMR_STARTS[amr] for amr in AMR_KEYS}
-        amr_availabilities = {amr: 0.0 for amr in AMR_KEYS}
-        station_availabilities = {s: 0.0 for s in STATIONS.keys()}
-        
-        amr_inventory = {amr: {mat: 0 for mat in TYPE_DURATION.keys()} for amr in AMR_KEYS}
-        amr_inventory["AMR1"]["A"] = 3
-        amr_inventory["AMR2"]["B"] = 3
-        amr_inventory["AMR3"]["C"] = 3
-    
-    assigned_jobs_set = set()
-    
-    # Outputs to build the Individual
-    order_seq = []
-    amr_assignment_map = {} # job_idx -> amr
-    
-    total_log_prob = 0.0
-    
-    # Model evaluation mode depends on deterministic flag
     if deterministic:
-        model.eval()
+        with torch.no_grad():
+            inds, log_prob = build_schedules([jobs], model, True, [init_state] if init_state else None)
     else:
-        model.train()
-        
-    for step in range(len(jobs)):
-        # 1. State Extraction
-        amr_feat, job_feat, job_mask = extract_state(
-            jobs, assigned_jobs_set, amr_positions, amr_availabilities, amr_inventory
-        )
-        
-        # Move tensors to the model's device
-        device = next(model.parameters()).device
-        amr_feat = amr_feat.to(device)
-        job_feat = job_feat.to(device)
-        job_mask = job_mask.to(device)
-        
-        # 2. GNN Forward Pass
-        logits = model(amr_feat, job_feat, job_mask) # shape: (1, 3, num_jobs)
-        
-        # 3. Action Selection
-        # Flatten to 1D to pick joint (AMR, Job) action
-        flat_logits = logits.view(-1)
-        
-        if deterministic:
-            best_action = torch.argmax(flat_logits).item()
-        else:
-            # Stochastic sampling (e.g. for REINFORCE training)
-            # Use log_softmax for numerically stable log probabilities
-            log_probs = F.log_softmax(flat_logits, dim=0)
-            probs = torch.exp(log_probs)
-            
-            # Create categorical distribution to sample from
-            dist = torch.distributions.Categorical(probs)
-            action_tensor = dist.sample()
-            best_action = action_tensor.item()
-            
-            # Accumulate log probability of chosen action
-            total_log_prob += log_probs[best_action]
-            
-        # Decode action: amr_index and job_index
-        num_jobs = len(jobs)
-        amr_idx = best_action // num_jobs
-        job_list_idx = best_action % num_jobs
-        
-        chosen_amr = AMR_KEYS[amr_idx]
-        chosen_job = jobs[job_list_idx]
-        
-        # Record choice
-        order_seq.append(chosen_job.idx)
-        amr_assignment_map[chosen_job.idx] = chosen_amr
-        assigned_jobs_set.add(chosen_job.idx)
-        
-        # 4. Update Internal State (Fast Approximation for the next step of GNN inference)
-        mat = chosen_job.type_
-        curr_pos = amr_positions[chosen_amr]
-        avail = amr_availabilities[chosen_amr]
-        
-        # Check supply
-        if amr_inventory[chosen_amr][mat] == 0:
-            supply_loc = SUPPLY_LOCATIONS[mat]
-            avail += heuristic(curr_pos, supply_loc)
-            curr_pos = supply_loc
-            amr_inventory[chosen_amr][mat] = 3
-            
-        # Travel to station
-        target_station = STATIONS[chosen_job.station]
-        avail += heuristic(curr_pos, target_station)
-        
-        # Wait for station
-        avail = max(avail, station_availabilities[chosen_job.station])
-        
-        # Process
-        avail += chosen_job.duration
-        amr_inventory[chosen_amr][mat] -= 1
-        
-        # Update state dicts
-        station_availabilities[chosen_job.station] = avail
-        amr_availabilities[chosen_amr] = avail
-        amr_positions[chosen_amr] = target_station
-            
-    # Finalize Individual (Order amr_assignment list by job_idx)
-    final_assignment = []
-    # Make sure we use the ID sequence mapped to assignments
-    for i in range(len(jobs)):
-        # job.idx may not perfectly sequential in all domains, but here make_jobs uses idx 0..N-1
-        # Re-map so amr_assignment aligns with job_idx 0->N-1
-        final_assignment.append(amr_assignment_map[i])
-        
-    ind = Individual(order=order_seq, amr_assignment=final_assignment)
-    
+        inds, log_prob = build_schedules([jobs], model, False, [init_state] if init_state else None)
     solve_dur = time.perf_counter() - start_time
-    return ind, total_log_prob, solve_dur
+    return inds[0], (0.0 if deterministic else log_prob[0]), solve_dur
 
 
 if __name__ == "__main__":
     import numpy as np # Local import for seeds
     import argparse
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--gantt", action="store_true", help="Plot Gantt Chart")
     parser.add_argument("--inbox", type=str, default="", help="Path to dispatch inbox JSONL file")
     parser.add_argument("--save_img", type=str, default="", help="Save the schedule Gantt chart to this file (e.g., schedule.png)")
     parser.add_argument("--collision_iters", type=int, default=collision_routing_iters, help="Number of collision routing iterations")
     parser.add_argument("--output_csv", type=str, default="GNN_summary_results.csv", help="Output CSV filename")
+    parser.add_argument("--weights", type=str, default=str(DEFAULT_WEIGHTS), help="SchedulerGNN weights")
     args = parser.parse_args()
-    
-    # 1. Setup environment and seed 
+
+    # 1. Setup environment and seed
     random.seed(42)
     torch.manual_seed(42)
     np.random.seed(42)
-    
+
     # 2. Create Model
-    gnn = SchedulerGNN(amr_in_dim=8, job_in_dim=10, hidden_dim=128, gnn_layers=2)
-    
-    weights_path = Path("gnn_scheduler_best.pth")
-    if weights_path.exists():
-        print(f"Loading trained weights from {weights_path}...")
-        gnn.load_state_dict(torch.load(weights_path, map_location='cpu'))
-    
+    gnn = SchedulerGNN()
+    if load_gnn_weights(gnn, args.weights):
+        print(f"Loaded trained weights from {args.weights}")
+
     # 3. Load Jobs
     if args.inbox:
         dispatch_events = load_dispatch_events(Path(args.inbox))
     else:
         dispatch_events = load_dispatch_events()
     target_index = os.environ.get(DISPATCH_EVENT_INDEX_ENV)
-    
+
     output_filename = args.output_csv
     results_data = []
 
@@ -384,42 +465,42 @@ if __name__ == "__main__":
     if dispatch_events:
         if target_index is not None:
              dispatch_events = [e for e in dispatch_events if str(e["index"]) == str(target_index)]
-        
+
         for event in dispatch_events:
             print(f"\n=== Processing Dispatch Event {event['index']} (Jobs: {len(event['jobs'])}) ===")
-            
+
             # a. Run GNN Inference
             best_ind, _, solve_dur_ns = solve_with_gnn(event["jobs"], gnn)
-            
+
             # b. Apply Local Improve for routing/collision adjustment exactly identically to GA.py
             improve_start = time.perf_counter()
             best_ind = local_improve(best_ind, event["jobs"], max_iters=routing_iters)
             if args.collision_iters > 0:
                 best_ind = local_improve(best_ind, event["jobs"], max_iters=args.collision_iters, check_collision=True)
             solve_dur_ns += (time.perf_counter() - improve_start)
-            
+
             # c. Evaluate with Exact GA routing logic
             img_path = f"{args.save_img.split('.')[0]}_{event['index']}.png" if args.save_img else None
             makespan, computation_time = describe_solution_gnn(best_ind, event["jobs"], solve_time=solve_dur_ns, show_gantt=args.gantt, save_img=img_path)
-            
+
             results_data.append([event['index'], f"{makespan:.2f}", f"{computation_time:.4f}"])
     else:
         print("No dispatch file found. Generating random jobs...")
         jobs = make_jobs()
-        
+
         # a. Run GNN Inference
         best_ind, _, solve_dur_ns = solve_with_gnn(jobs, gnn)
-        
+
         # b. Apply Local Improve for routing/collision adjustment exactly identically to GA.py
         improve_start = time.perf_counter()
         best_ind = local_improve(best_ind, jobs, max_iters=routing_iters)
         if args.collision_iters > 0:
             best_ind = local_improve(best_ind, jobs, max_iters=args.collision_iters, check_collision=True)
         solve_dur_ns += (time.perf_counter() - improve_start)
-        
+
         # c. Evaluate with Exact GA routing logic
         makespan, computation_time = describe_solution_gnn(best_ind, jobs, solve_time=solve_dur_ns, show_gantt=args.gantt, save_img=args.save_img)
-        
+
         results_data.append(["random", f"{makespan:.2f}", f"{computation_time:.4f}"])
 
     # 4. Save metrics
@@ -429,4 +510,3 @@ if __name__ == "__main__":
             writer.writerow(["Event_Index", "Makespan", "Computation_Time"])
             writer.writerows(results_data)
         print(f"\nSummary results saved to {output_filename}")
-

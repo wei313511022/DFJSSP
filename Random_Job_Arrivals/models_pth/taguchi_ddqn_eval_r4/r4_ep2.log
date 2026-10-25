@@ -1,0 +1,51 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+
+Ep   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner
+------------------------------------------------------------------------------------------------------------------------
+[AI-DECIDE] t=   3.0 step=   4 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   4.0 step=   4 GA= 674.58 ms | active=2 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  15.0 step=  16 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  16.0 step=  16 GA=  24.39 ms | active=3 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  24.0 step=  25 choose RESCHEDULE | active=2 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  25.0 step=  25 GA=  24.18 ms | active=2 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  31.0 step=  32 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  32.0 step=  32 GA=  24.47 ms | active=1 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  33.0 step=  34 choose RESCHEDULE | active=5 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  35.0 step=  34 GA=1353.78 ms | active=5 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  42.0 step=  42 choose RESCHEDULE | active=6 unstarted=3 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  44.0 step=  42 GA=1317.17 ms | active=7 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  53.0 step=  52 choose RESCHEDULE | active=7 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  55.0 step=  52 GA=1750.17 ms | active=8 unstarted=5 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  60.0 step=  58 choose RESCHEDULE | active=9 unstarted=6 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  63.0 step=  58 GA=2504.11 ms | active=8 unstarted=7 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  68.0 step=  64 choose RESCHEDULE | active=10 unstarted=9 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  73.0 step=  64 GA=4389.06 ms | active=11 unstarted=10 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  77.0 step=  69 choose RESCHEDULE | active=12 unstarted=9 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  81.0 step=  69 GA=3588.22 ms | active=13 unstarted=10 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  87.0 step=  76 choose RESCHEDULE | active=14 unstarted=11 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  92.0 step=  76 GA=4121.07 ms | active=14 unstarted=11 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  99.0 step=  84 choose RESCHEDULE | active=15 unstarted=12 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 104.0 step=  84 GA=4386.88 ms | active=15 unstarted=12 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 110.0 step=  91 choose RESCHEDULE | active=15 unstarted=12 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 115.0 step=  91 GA=4489.15 ms | active=14 unstarted=12 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 125.0 step= 102 choose RESCHEDULE | active=17 unstarted=15 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 131.0 step= 102 GA=5966.07 ms | active=17 unstarted=15 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 141.0 step= 113 choose RESCHEDULE | active=22 unstarted=19 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 153.0 step= 113 GA=11474.25 ms | active=21 unstarted=19 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 311.0 step= 272 choose RESCHEDULE | active=46 unstarted=45 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 359.0 step= 272 GA=47293.57 ms | active=45 unstarted=45 | mask_after=[1.0, 1.0]
+2    | 45.6       21.4        | 141.5   90.4     | 496.0   508.0    | 93.4      392.9     | AI
+
+Results saved to ../models_pth/taguchi_ddqn_eval_r4/r4_ep2.png
+Episode data saved to ../models_pth/taguchi_ddqn_eval_r4/r4_ep2.csv
+
+================================================================================
+Metric               | AI Average      | Fix Average     | Diff (%)       
+--------------------------------------------------------------------------------
+Done Jobs (%)        | 45.63           | 21.36           | 113.64         
+Flow Time            | 141.53          | 90.42           | 56.53          
+Makespan             | 495.96          | 507.96          | -2.36          
+GA Time (s)          | 93.38           | 392.91          | -76.23         
+================================================================================
+Summary table saved to ../models_pth/taguchi_ddqn_eval_r4/r4_ep2_summary.csv

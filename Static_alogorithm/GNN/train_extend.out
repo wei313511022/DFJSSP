@@ -1,0 +1,84 @@
+train 900  val 50  (test = lines 950-999, not used here)
+epoch 0  val 1017.3  (saved)
+epoch 25    0.5 min  train 643.0  val 610.0  best 610.0  (saved)
+epoch 50    1.1 min  train 589.5  val 588.9  best 588.9  (saved)
+epoch 75    1.6 min  train 596.1  val 575.8  best 575.8  (saved)
+epoch 100    2.1 min  train 593.5  val 568.8  best 568.8  (saved)
+epoch 125    2.6 min  train 575.0  val 548.8  best 548.8  (saved)
+epoch 150    3.1 min  train 570.4  val 514.8  best 514.8  (saved)
+epoch 175    3.7 min  train 557.3  val 501.1  best 501.1  (saved)
+epoch 200    4.2 min  train 523.8  val 470.2  best 470.2  (saved)
+epoch 225    4.7 min  train 544.0  val 507.8  best 470.2
+epoch 250    5.2 min  train 507.9  val 482.5  best 470.2
+epoch 275    5.7 min  train 492.0  val 475.8  best 470.2
+epoch 300    6.2 min  train 478.2  val 477.2  best 470.2
+epoch 325    6.7 min  train 482.1  val 466.3  best 466.3  (saved)
+epoch 350    7.2 min  train 493.0  val 477.2  best 466.3
+epoch 375    7.7 min  train 468.9  val 461.4  best 461.4  (saved)
+epoch 400    8.2 min  train 473.3  val 469.9  best 461.4
+epoch 425    8.7 min  train 472.4  val 464.2  best 461.4
+epoch 450    9.2 min  train 466.4  val 463.2  best 461.4
+epoch 475    9.8 min  train 469.8  val 461.1  best 461.1  (saved)
+epoch 500   10.3 min  train 472.6  val 464.8  best 461.1
+epoch 525   10.8 min  train 467.4  val 465.7  best 461.1
+epoch 550   11.3 min  train 472.2  val 467.7  best 461.1
+epoch 575   11.8 min  train 475.7  val 463.5  best 461.1
+epoch 600   12.3 min  train 475.0  val 463.9  best 461.1
+epoch 625   12.8 min  train 470.5  val 460.9  best 460.9  (saved)
+epoch 650   13.3 min  train 466.1  val 455.3  best 455.3  (saved)
+epoch 675   13.8 min  train 459.4  val 455.5  best 455.3
+epoch 700   14.3 min  train 467.8  val 456.7  best 455.3
+epoch 725   14.8 min  train 474.0  val 465.9  best 455.3
+epoch 750   15.4 min  train 478.1  val 473.5  best 455.3
+epoch 775   15.9 min  train 469.0  val 458.9  best 455.3
+epoch 800   16.6 min  train 468.4  val 452.3  best 452.3  (saved)
+epoch 825   17.3 min  train 459.6  val 454.9  best 452.3
+epoch 850   17.8 min  train 467.5  val 457.4  best 452.3
+epoch 875   18.4 min  train 457.7  val 460.9  best 452.3
+epoch 900   19.0 min  train 465.2  val 463.3  best 452.3
+epoch 925   19.7 min  train 471.9  val 460.0  best 452.3
+epoch 950   20.5 min  train 473.6  val 459.2  best 452.3
+epoch 975   21.1 min  train 469.4  val 459.5  best 452.3
+epoch 1000   21.7 min  train 452.3  val 456.1  best 452.3
+epoch 1025   22.6 min  train 465.6  val 451.7  best 451.7  (saved)
+epoch 1050   23.6 min  train 466.5  val 453.3  best 451.7
+epoch 1075   24.5 min  train 459.4  val 461.4  best 451.7
+epoch 1100   25.5 min  train 464.7  val 456.1  best 451.7
+epoch 1125   26.4 min  train 464.1  val 457.5  best 451.7
+epoch 1150   27.4 min  train 457.6  val 457.1  best 451.7
+epoch 1175   28.4 min  train 467.3  val 457.1  best 451.7
+epoch 1200   29.7 min  train 458.6  val 454.7  best 451.7
+epoch 1225   30.9 min  train 460.3  val 457.3  best 451.7
+epoch 1250   32.2 min  train 454.7  val 455.9  best 451.7
+epoch 1275   33.6 min  train 464.8  val 461.1  best 451.7
+epoch 1300   34.6 min  train 460.7  val 461.2  best 451.7
+epoch 1325   35.2 min  train 471.2  val 460.2  best 451.7
+epoch 1350   36.1 min  train 473.0  val 458.4  best 451.7
+epoch 1375   37.0 min  train 461.7  val 456.8  best 451.7
+epoch 1400   37.7 min  train 456.7  val 455.6  best 451.7
+epoch 1425   38.3 min  train 455.5  val 453.5  best 451.7
+epoch 1450   39.1 min  train 465.5  val 458.7  best 451.7
+epoch 1475   39.8 min  train 467.4  val 462.0  best 451.7
+epoch 1500   40.5 min  train 474.6  val 456.5  best 451.7
+epoch 1525   41.1 min  train 460.3  val 457.5  best 451.7
+epoch 1550   41.7 min  train 463.3  val 457.0  best 451.7
+epoch 1575   42.3 min  train 468.4  val 458.1  best 451.7
+epoch 1600   42.8 min  train 452.6  val 457.7  best 451.7
+epoch 1625   43.4 min  train 468.1  val 458.8  best 451.7
+epoch 1650   44.0 min  train 463.7  val 449.8  best 449.8  (saved)
+epoch 1675   44.7 min  train 457.7  val 451.3  best 449.8
+epoch 1700   45.8 min  train 461.2  val 457.3  best 449.8
+epoch 1725   46.9 min  train 454.2  val 453.0  best 449.8
+epoch 1750   48.0 min  train 459.6  val 452.1  best 449.8
+epoch 1775   49.0 min  train 453.7  val 454.6  best 449.8
+epoch 1800   50.0 min  train 461.9  val 449.9  best 449.8
+epoch 1825   50.8 min  train 460.2  val 454.2  best 449.8
+epoch 1850   51.8 min  train 459.5  val 451.9  best 449.8
+epoch 1875   53.1 min  train 464.1  val 453.7  best 449.8
+epoch 1900   54.4 min  train 462.9  val 451.4  best 449.8
+epoch 1925   55.7 min  train 457.6  val 451.1  best 449.8
+epoch 1950   56.7 min  train 465.2  val 454.1  best 449.8
+epoch 1975   57.7 min  train 460.4  val 454.5  best 449.8
+epoch 2000   58.5 min  train 462.5  val 454.9  best 449.8
+epoch 2025   59.4 min  train 465.6  val 452.9  best 449.8
+done: 2039 epochs, best validation makespan 449.8 -> gnn_scheduler_extend.pth

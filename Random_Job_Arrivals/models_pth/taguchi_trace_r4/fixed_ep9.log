@@ -1,0 +1,3 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+{"episode": 9, "policy": "fixed", "total_jobs": 125, "done_pct": 13.600000000000001, "reschedules": 17, "compute_s": 598.9272482529923}

@@ -226,14 +226,15 @@ def run_one_episode_fix(env, period=5.0):
     done_cnt, flow, mk = episode_metrics(env)
     return done_cnt, flow, mk, total_ga
 
-def run_test(model_path, output_csv):
+def run_test(model_path, output_csv, fix_period=10.0, first=0, count=None):
     set_seed(GLOBAL_SEED)  # Global seed for reproducibility
     env = GridEnv()
     agent = load_agent(model_path)
 
     TEST_EPISODES = len(env.episodes)
+    last = TEST_EPISODES if count is None else min(TEST_EPISODES, first + count)
     # TEST_EPISODES = 10
-    FIX_PERIOD = 10.0  # ✅ 你要的固定時間 reschedule
+    FIX_PERIOD = fix_period  # ✅ 你要的固定時間 reschedule
 
     # --- CSV Setup ---
     csv_filename = output_csv
@@ -254,7 +255,7 @@ def run_test(model_path, output_csv):
         "ai_ga": [], "fix_ga": []
     }
 
-    for ep in range(TEST_EPISODES):
+    for ep in range(first, last):
         # --- AI ---
         set_seed(GLOBAL_SEED + ep * 1000)  # Deterministic seed per episode for AI
         env.ep_idx = ep
@@ -345,8 +346,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run performance test with a specific model.")
     parser.add_argument("--model", type=str, default="../models_pth/gnn_ddqn_model_v7_demo/gnn_ddqn_model_v7_ep800.pth", help="Path to the model file")
     parser.add_argument("--output", type=str, default="../models_pth/gnn_ddqn_model_v7_demo/benchmark_results.csv", help="Path to the output CSV file")
-    parser.add_argument("--module", type=str, default="models.GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
+    parser.add_argument("--module", type=str, default="GNN_models.GNN_DDQN_V7", help="Module to import GridEnv and SchedulerAgent from")
+    parser.add_argument("--seed", type=int, default=GLOBAL_SEED, help="Base random seed")
+    parser.add_argument("--period", type=float, default=10.0, help="Reschedule period (sim seconds) for the fixed-interval baseline")
+    parser.add_argument("--dataset", type=str, default="../../test_case/dynamic/test_dataset_demo.jsonl", help="Test dataset (JSONL, one episode per line)")
+    parser.add_argument("--sim_time", type=float, default=None, help="Override CONFIG['SIM_TIME'] (episode length in sim seconds)")
+    parser.add_argument("--first", type=int, default=0, help="First episode index to test")
+    parser.add_argument("--count", type=int, default=None, help="Number of episodes to test (default: all from --first)")
     args = parser.parse_args()
+    GLOBAL_SEED = args.seed
 
     # Ensure parent directory is in sys.path so we can import dynamically
     parent_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -362,7 +370,9 @@ if __name__ == "__main__":
         print(f"Error importing module {args.module}: {e}")
         sys.exit(1)
 
-    CONFIG['DATASET_PATH'] = "../../test_case/dynamic/test_dataset_demo.jsonl"
+    CONFIG['DATASET_PATH'] = args.dataset
+    if args.sim_time is not None:
+        CONFIG['SIM_TIME'] = args.sim_time
     CONFIG['DEVICE'] = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    run_test(args.model, args.output)
+    run_test(args.model, args.output, fix_period=args.period, first=args.first, count=args.count)

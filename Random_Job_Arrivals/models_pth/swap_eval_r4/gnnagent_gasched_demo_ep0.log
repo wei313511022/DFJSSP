@@ -1,0 +1,104 @@
+CUDA Available: False
+WARNING: Running on CPU. Install PyTorch with CUDA support.
+
+Ep   | AI Done(%) Fix Done(%) | AI Flow  Fix Flow | AI MK    Fix MK   | AI GA(s)  Fix GA(s) | Winner
+------------------------------------------------------------------------------------------------------------------------
+[AI-DECIDE] t=   4.0 step=   5 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   5.0 step=   5 GA= 859.70 ms | active=2 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   6.0 step=   7 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   7.0 step=   7 GA= 983.51 ms | active=4 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   9.0 step=  10 choose RESCHEDULE | active=5 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  10.0 step=  10 GA= 891.99 ms | active=5 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  14.0 step=  15 choose RESCHEDULE | active=6 unstarted=3 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  16.0 step=  15 GA=1117.41 ms | active=6 unstarted=3 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  17.0 step=  17 choose RESCHEDULE | active=7 unstarted=4 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  18.0 step=  17 GA= 967.78 ms | active=7 unstarted=4 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  23.0 step=  23 choose RESCHEDULE | active=8 unstarted=5 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  25.0 step=  23 GA=1279.77 ms | active=9 unstarted=6 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  26.0 step=  25 choose RESCHEDULE | active=8 unstarted=5 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  28.0 step=  25 GA=1428.73 ms | active=9 unstarted=6 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  29.0 step=  27 choose RESCHEDULE | active=10 unstarted=7 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  31.0 step=  27 GA=1848.29 ms | active=9 unstarted=7 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  31.0 step=  28 choose RESCHEDULE | active=9 unstarted=7 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  33.0 step=  28 GA=1811.07 ms | active=9 unstarted=7 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  44.0 step=  40 choose RESCHEDULE | active=8 unstarted=5 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  46.0 step=  40 GA=1612.65 ms | active=9 unstarted=7 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  50.0 step=  45 choose RESCHEDULE | active=10 unstarted=8 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  52.0 step=  45 GA=1727.26 ms | active=11 unstarted=9 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  64.0 step=  58 choose RESCHEDULE | active=11 unstarted=8 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  66.0 step=  58 GA=1738.71 ms | active=12 unstarted=9 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  68.0 step=  61 choose RESCHEDULE | active=13 unstarted=10 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  70.0 step=  61 GA=1764.28 ms | active=14 unstarted=11 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  78.0 step=  70 choose RESCHEDULE | active=15 unstarted=12 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  80.0 step=  70 GA=1877.59 ms | active=15 unstarted=13 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  87.0 step=  78 choose RESCHEDULE | active=15 unstarted=13 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  90.0 step=  78 GA=2557.79 ms | active=16 unstarted=14 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 113.0 step= 102 choose RESCHEDULE | active=18 unstarted=15 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 116.0 step= 102 GA=2548.66 ms | active=19 unstarted=16 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 128.0 step= 115 choose RESCHEDULE | active=23 unstarted=20 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 132.0 step= 115 GA=3666.74 ms | active=23 unstarted=21 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 152.0 step= 136 choose RESCHEDULE | active=26 unstarted=23 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 157.0 step= 136 GA=4095.96 ms | active=27 unstarted=24 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 179.0 step= 159 choose RESCHEDULE | active=31 unstarted=28 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 185.0 step= 159 GA=5695.10 ms | active=32 unstarted=29 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 217.0 step= 192 choose RESCHEDULE | active=37 unstarted=34 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 224.0 step= 192 GA=6651.52 ms | active=38 unstarted=35 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 282.0 step= 251 choose RESCHEDULE | active=42 unstarted=39 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 291.0 step= 251 GA=8439.06 ms | active=42 unstarted=40 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 366.0 step= 327 choose RESCHEDULE | active=50 unstarted=47 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 376.0 step= 327 GA=9662.40 ms | active=51 unstarted=49 | mask_after=[1.0, 1.0]
+0    | 56.4       36.4        | 119.1   108.0    | 489.4   487.4    | 63.2      315.6     | AI
+[AI-DECIDE] t=   3.0 step=   4 choose RESCHEDULE | active=1 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   4.0 step=   4 GA= 217.09 ms | active=1 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=   5.0 step=   6 choose RESCHEDULE | active=2 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=   6.0 step=   6 GA= 255.99 ms | active=2 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  14.0 step=  15 choose RESCHEDULE | active=3 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  15.0 step=  15 GA= 955.77 ms | active=4 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  16.0 step=  17 choose RESCHEDULE | active=5 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  17.0 step=  17 GA= 396.10 ms | active=5 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  21.0 step=  22 choose RESCHEDULE | active=4 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  22.0 step=  22 GA= 217.85 ms | active=4 unstarted=1 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  32.0 step=  33 choose RESCHEDULE | active=4 unstarted=1 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  34.0 step=  33 GA=1122.47 ms | active=4 unstarted=2 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  34.0 step=  34 choose RESCHEDULE | active=4 unstarted=2 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  36.0 step=  34 GA=1095.91 ms | active=4 unstarted=2 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  37.0 step=  36 choose RESCHEDULE | active=7 unstarted=5 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  39.0 step=  36 GA=1405.38 ms | active=7 unstarted=6 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t=  39.0 step=  37 choose RESCHEDULE | active=7 unstarted=6 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  41.0 step=  37 GA=1388.70 ms | active=7 unstarted=6 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  42.0 step=  39 choose RESCHEDULE | active=8 unstarted=7 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  44.0 step=  39 GA=1743.86 ms | active=8 unstarted=7 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  48.0 step=  44 choose RESCHEDULE | active=9 unstarted=6 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  50.0 step=  44 GA=1054.03 ms | active=9 unstarted=6 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  52.0 step=  47 choose RESCHEDULE | active=9 unstarted=6 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  54.0 step=  47 GA=1578.47 ms | active=10 unstarted=7 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t=  71.0 step=  65 choose RESCHEDULE | active=11 unstarted=8 | mask=[1.0, 1.0]
+[AI-AFTER ] t=  73.0 step=  65 GA=1955.98 ms | active=12 unstarted=10 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 100.0 step=  93 choose RESCHEDULE | active=13 unstarted=10 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 103.0 step=  93 GA=2106.24 ms | active=14 unstarted=11 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 126.0 step= 117 choose RESCHEDULE | active=13 unstarted=10 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 129.0 step= 117 GA=2622.79 ms | active=14 unstarted=11 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 150.0 step= 139 choose RESCHEDULE | active=17 unstarted=14 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 153.0 step= 139 GA=2695.63 ms | active=17 unstarted=14 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 197.0 step= 184 choose RESCHEDULE | active=19 unstarted=16 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 201.0 step= 184 GA=3271.88 ms | active=20 unstarted=18 | mask_after=[1.0, 1.0]
+[AI-DECIDE] t= 230.0 step= 214 choose RESCHEDULE | active=22 unstarted=19 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 234.0 step= 214 GA=3767.42 ms | active=23 unstarted=20 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 273.0 step= 254 choose RESCHEDULE | active=26 unstarted=23 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 278.0 step= 254 GA=4530.56 ms | active=27 unstarted=24 | mask_after=[1.0, 0.0]
+[AI-DECIDE] t= 344.0 step= 321 choose RESCHEDULE | active=31 unstarted=28 | mask=[1.0, 1.0]
+[AI-AFTER ] t= 351.0 step= 321 GA=6049.56 ms | active=31 unstarted=29 | mask_after=[1.0, 1.0]
+1    | 65.9       48.9        | 101.0   92.9     | 487.3   479.3    | 38.4      236.3     | AI
+
+Results saved to ../models_pth/swap_eval_r4/gnnagent_gasched_demo_ep0.png
+Episode data saved to ../models_pth/swap_eval_r4/gnnagent_gasched_demo_ep0.csv
+
+================================================================================
+Metric               | AI Average      | Fix Average     | Diff (%)       
+--------------------------------------------------------------------------------
+Done Jobs (%)        | 61.14           | 42.61           | 43.47          
+Flow Time            | 110.05          | 100.46          | 9.54           
+Makespan             | 488.37          | 483.37          | 1.03           
+GA Time (s)          | 50.83           | 275.92          | -81.58         
+================================================================================
+Summary table saved to ../models_pth/swap_eval_r4/gnnagent_gasched_demo_ep0_summary.csv

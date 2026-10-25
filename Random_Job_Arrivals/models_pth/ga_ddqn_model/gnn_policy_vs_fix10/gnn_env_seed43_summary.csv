@@ -1,0 +1,5 @@
+Metric,AI Average,Fix Average,Diff (%)
+Done Jobs (%),15.17,13.10,15.79
+Flow Time,90.46,78.60,15.08
+Makespan,257.08,256.08,0.39
+GA Time (s),165.08,146.85,12.41
