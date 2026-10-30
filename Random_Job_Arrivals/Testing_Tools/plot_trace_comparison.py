@@ -86,6 +86,74 @@ def episode_figure(data, ep, title, out):
     plt.close(fig)
 
 
+def cjk_font_family(ttc="/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", want="Noto Sans CJK TC"):
+    """Register the Traditional-Chinese face of Noto Sans CJK with matplotlib and return its family name.
+
+    matplotlib only reads the first face of a .ttc (the JP one), so the TC face is extracted once
+    into ~/.cache with fontTools; if that is not possible the JP face (same characters) is used.
+    """
+    from matplotlib import font_manager as fm
+    name = "NotoSansCJKtc-Regular.otf" if want == "Noto Sans CJK TC" else want.replace(" ", "") + "-Regular.otf"
+    cache = os.path.expanduser(f"~/.cache/dfjssp_fonts/{name}")
+    try:
+        if not os.path.exists(cache):
+            from fontTools.ttLib import TTCollection
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            for font in TTCollection(ttc).fonts:
+                if font["name"].getDebugName(1) == want:
+                    font.save(cache)
+                    break
+        fm.fontManager.addfont(cache)
+        return fm.FontProperties(fname=cache).get_name()
+    except Exception:
+        fm.fontManager.addfont(ttc)
+        return fm.FontProperties(fname=ttc).get_name()
+
+
+def episode_figure_zh(data, ep, out):
+    """Traditional-Chinese version of panels (a) and (b) only, larger type."""
+    zh = {"ddqn": "iSched", "fixed": "固定每 10 秒"}
+    with plt.rc_context({"font.family": cjk_font_family(), "axes.unicode_minus": False}):
+        fig, axes = plt.subplots(2, 1, figsize=(9, 7.0), sharex=True, gridspec_kw={"height_ratios": [1, 1.5], "hspace": 0.62})
+        # (a) when it rescheduled
+        ax = axes[0]
+        ylabels = []
+        for lane, (pol, _, color) in enumerate(POL):
+            s, rows = data[(pol, ep)]
+            bars = [(r["t"], min(r["t_after"], H) - r["t"]) for r in rows if r["action"] and r["t"] < H]
+            ax.broken_barh(bars, (1 - lane - 0.32, 0.64), facecolors=color, edgecolors=SURF, linewidth=0.8)
+            ylabels.append(zh[pol])
+        ax.set_yticks([1, 0], ylabels)
+        ax.set_ylim(-0.6, 1.6)
+        ax.set_title("(a) 重排程時機（長條＝計算時間）", loc="left", fontsize=18, color=TEXT, pad=10)
+        style(ax)
+        ax.tick_params(axis="y", length=0, labelsize=17, labelcolor=TEXT)
+        ax.tick_params(axis="x", labelsize=15, labelbottom=True)   # own time axis (sharex hides it by default)
+        ax.set_xlabel("模擬時間（秒）", color=TEXT2, fontsize=16)
+        # (b) jobs completed
+        ax = axes[1]
+        for pol, _, color in POL:
+            s, rows = data[(pol, ep)]
+            pts = [(0.0, 0)] + [(r["t_after"], r["completed_after"]) for r in rows if r["t_after"] <= H]
+            pts.append((H, pts[-1][1]))
+            xs, ys = zip(*pts)
+            ax.step(xs, ys, where="post", color=color, linewidth=3.0, label=zh[pol])
+            ax.text(H + 8, ys[-1], f"{ys[-1]} 件", va="center", fontsize=17, color=TEXT, clip_on=False)
+        ax.set_title("(b) 累計完成工件數", loc="left", fontsize=18, color=TEXT, pad=10)
+        ax.set_ylabel("工件數", color=TEXT2, fontsize=16)
+        ax.set_xlabel("模擬時間（秒）", color=TEXT2, fontsize=16)
+        ax.set_xlim(0, H)
+        style(ax, "both")
+        ax.tick_params(labelsize=15)
+        ax.legend(loc="upper left", frameon=False, fontsize=16, labelcolor=TEXT2, handlelength=1.6)
+        tot = data[("fixed", ep)][0]["total_jobs"]
+        fig.suptitle("Taguchi-GA 重排程：iSched vs. 固定每 10 秒", x=0.015, y=0.995, ha="left", fontsize=22, color=TEXT)
+        fig.text(0.015, 0.92, f"測試回合 {ep}｜{tot} 個工件｜模擬時長 {H:.0f} 秒", ha="left", fontsize=16, color=TEXT2)
+        fig.subplots_adjust(top=0.835, left=0.2, right=0.88, bottom=0.1)
+        fig.savefig(out, dpi=200, facecolor=SURF, bbox_inches="tight", pad_inches=0.25)
+        plt.close(fig)
+
+
 def summary_figure(data, eps, title, out):
     metrics = [
         ("Reschedules started before t = 500 s", lambda s, rows: sum(1 for r in rows if r["action"] and r["t"] < H), "{:.1f}"),
@@ -119,13 +187,19 @@ def main():
     ap.add_argument("folder")
     ap.add_argument("--title", default="Taguchi-GA scheduler")
     ap.add_argument("--episode", type=int, default=None, help="episode for the detail figure (default: median gap)")
+    ap.add_argument("--zh", action="store_true", help="only write the Traditional-Chinese panels (a)+(b) figure")
     a = ap.parse_args()
     data = load(a.folder)
     eps = sorted(e for (p, e) in data if p == "ddqn" and ("fixed", e) in data)
     if a.episode is None:   # episode whose jobs-done gap is the median one: a typical case, not the best
         gaps = sorted(eps, key=lambda e: data[("ddqn", e)][0]["done_pct"] - data[("fixed", e)][0]["done_pct"])
         a.episode = gaps[len(gaps) // 2]
-    p1 = os.path.join(a.folder, f"trace_episode{a.episode}.png")
+    if a.zh:
+        p = os.path.join(a.folder, f"trace_episode{a.episode}_zh.png")
+        episode_figure_zh(data, a.episode, p)
+        print(p)
+        return
+    p1 =os.path.join(a.folder, f"trace_episode{a.episode}.png")
     episode_figure(data, a.episode, a.title, p1)
     p2 = os.path.join(a.folder, "trace_summary.png")
     means = summary_figure(data, eps, a.title, p2)

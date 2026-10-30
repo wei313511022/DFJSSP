@@ -1,7 +1,0 @@
-gnn_chain_shell 116368 (static GNN train.py, then GNN_DDQN_V7)
-gnn_static_train 116371
-ga_ddqn 116370
-taguchi_ddqn 116369
-ga_ddqn_r4 127607 (core 21)
-taguchi_ddqn_r4 127608 (core 22)
-gnn_ddqn_r4_waiter 127609 (starts GNN_DDQN_V7 r4 on core 23 after static GNN 116371 ends)

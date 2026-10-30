@@ -6,6 +6,13 @@ usage (from Testing_Tools):
   python trace_rescheduling.py --module Taguchi_models.Taguchi_DDQN --policy fixed --period 10 ...
 Seeds match test_performance.py (DDQN: 42 + ep*1000, fixed: 42 + ep*1000 + 500).
 Each line = one env step: time before/after, action, scheduler compute (s), jobs waiting, etc.
+
+--replay <trace.jsonl>  re-runs a recorded trace deterministically: each reschedule is charged
+                        exactly the recorded simulation time instead of measured wall-clock time
+                        (actions are checked against the recording).
+--ticks_out <file>      also writes one JSON line per simulation tick (AMR positions, modes, jobs,
+                        queues, inventory, stations, jobs waiting for assignment, completed count,
+                        and whether the AMRs are waiting for a reschedule computation).
 """
 import argparse
 import importlib
@@ -15,9 +22,39 @@ import random
 import sys
 
 import numpy as np
+import time
 import torch
 
 GLOBAL_SEED = 42
+
+
+class _RecordedDuration:
+    """Stand-in for time.perf_counter during one reschedule: first call 0, later calls = duration."""
+    def __init__(self, duration):
+        self.duration, self.calls = float(duration), 0
+
+    def __call__(self):
+        self.calls += 1
+        return 0.0 if self.calls == 1 else self.duration
+
+
+def tick_snapshot(env, computing):
+    sim = env.sim
+    queued_ids, amrs = set(), {}
+    for a, st in sim.amr_states.items():
+        job = st["job"]
+        q = [[j.idx, j.type_, j.station] for j in sim.amr_queues[a]]
+        queued_ids.update(j[0] for j in q)
+        if job is not None:
+            queued_ids.add(job.idx)
+        amrs[a] = {"pos": list(sim.positions[a]), "mode": st["mode"],
+                   "job": [job.idx, job.type_, job.station] if job is not None else None,
+                   "queue": q, "inv": dict(sim.inventory[a])}
+    waiting = [[j.jid, j.material] for j in env.active_jobs if j.status == 1 and j.jid not in queued_ids]
+    waiting += [[j.jid, j.material] for j in env.queue if j.arrival_ts <= sim.t]   # arrived, not yet seen
+    return {"t": sim.t, "computing": computing, "amrs": amrs, "waiting": waiting,
+            "completed": len(env.completed_jobs) + len(sim.completed_jobs_jids),
+            "stations": dict(sim.station_occupied)}
 
 
 def counts(env):
@@ -47,7 +84,10 @@ def main():
     ap.add_argument("--sim_time", type=float, default=500.0)
     ap.add_argument("--episode", type=int, default=0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--replay", default="", help="recorded trace to reproduce exactly")
+    ap.add_argument("--ticks_out", default="", help="per-tick state output (JSON lines)")
     args = ap.parse_args()
+    replay = [json.loads(l) for l in open(args.replay)][1:] if args.replay else None
 
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
     mod = importlib.import_module(args.module)
@@ -70,6 +110,15 @@ def main():
     state = env.reset()
     last_fix = -1e9
     rows = []
+    ticks, cur = [], {"computing": False}
+    if args.ticks_out:
+        sim_step = env.sim.step
+        def stepped(dt):                       # record every tick inside env.step
+            for _ in range(int(dt)):
+                sim_step(1)
+                ticks.append(tick_snapshot(env, cur["computing"]))
+        env.sim.step = stepped
+        ticks.append(tick_snapshot(env, False))
     while True:
         allowed = env.get_action_mask()[1] > 0.5
         if args.policy == "ddqn":
@@ -85,7 +134,20 @@ def main():
                 last_fix = env.sim_time
         before = counts(env)
         t0 = env.sim_time
-        state, _, done, dt = env.step(action)
+        i = len(rows)
+        if replay is not None:
+            rec = replay[i] if i < len(replay) else None
+            if rec is None or rec["action"] != action or abs(rec["t"] - t0) > 1e-9:
+                print(f"WARNING: replay diverged at step {i} (t={t0}); continuing with measured time")
+                replay = None
+        cur["computing"] = bool(action)
+        real_clock = time.perf_counter
+        if replay is not None and action:
+            time.perf_counter = _RecordedDuration(replay[i]["t_after"] - replay[i]["t"])
+        try:
+            state, _, done, dt = env.step(action)
+        finally:
+            time.perf_counter = real_clock
         rows.append({"t": t0, "t_after": env.sim_time, "action": action, "allowed": allowed,
                      "compute_s": env.last_ga_compute_time if action else 0.0, **before,
                      "completed_after": len(env.completed_jobs)})
@@ -101,6 +163,10 @@ def main():
         f.write(json.dumps({"summary": summary}) + "\n")
         for r in rows:
             f.write(json.dumps(r) + "\n")
+    if args.ticks_out:
+        with open(args.ticks_out, "w") as f:
+            for t in ticks:
+                f.write(json.dumps(t) + "\n")
     print(json.dumps(summary))
 
 
